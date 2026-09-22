@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import matter from "gray-matter";
 import { validateNote } from "../../src/rules/validate.js";
 import { parseRules } from "../../src/rules/parser.js";
 import type { RulesModel } from "../../src/rules/types.js";
@@ -125,6 +126,35 @@ describe("validateNote", () => {
       folder: "logs/",
     });
     expect(issues).toEqual([]);
+  });
+
+  it("accepts a date field gray-matter parsed as a JS Date (unquoted YAML date, e.g. from the shipped template)", () => {
+    // `date: 2026-09-22` with no quotes is valid YAML and gray-matter's
+    // parser turns it into a real Date, not a string — the same shape a
+    // note rendered from the shipped template produces once saved and
+    // re-parsed.
+    const { data } = matter("---\ndate: 2026-09-22\nactor: agent\n---\n\nbody\n");
+    expect(data["date"]).toBeInstanceOf(Date);
+
+    const issues = validateNote(rules, {
+      type: "session_log",
+      frontmatter: data,
+      fileName: "anything-goes.md",
+      folder: "logs/",
+    });
+    expect(issues).toEqual([]);
+  });
+
+  it("rejects an invalid Date instance for a date field", () => {
+    const issues = validateNote(rules, {
+      type: "session_log",
+      frontmatter: { date: new Date(Number.NaN), actor: "agent" },
+      fileName: "anything-goes.md",
+      folder: "logs/",
+    });
+    const date = issues.find((i) => i.field === "date");
+    expect(date?.kind).toBe("field");
+    expect(date?.message).toMatch(/date/i);
   });
 
   it("optional fields may be absent without violation", () => {

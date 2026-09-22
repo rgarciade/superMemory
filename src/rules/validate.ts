@@ -120,6 +120,23 @@ function checkFieldType(
       return undefined;
     }
     case "date": {
+      // gray-matter's YAML parser turns an unquoted `date: 2026-09-22`
+      // frontmatter value into a real Date instance, not a string — the
+      // shape any note round-tripped through the shipped templates
+      // produces. A valid Date is accepted as-is; an invalid one
+      // (e.g. `new Date(NaN)`) is still rejected.
+      if (value instanceof Date) {
+        if (Number.isNaN(value.getTime())) {
+          return {
+            kind: "field",
+            field,
+            expected: "date (YYYY-MM-DD)",
+            actual: String(value),
+            message: `field "${field}" must be a valid date, got an invalid Date`,
+          };
+        }
+        return undefined;
+      }
       if (typeof value !== "string" || !DATE_SHAPE.test(value)) {
         return {
           kind: "field",
