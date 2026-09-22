@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import type { Command } from "commander";
 import { input, confirm } from "@inquirer/prompts";
 import { simpleGit } from "simple-git";
@@ -60,18 +62,20 @@ export async function runSetup(
       "Vault path (a git repository with .memory/rules.md):",
     )).trim();
     if (answer === "") continue;
+    const resolved = resolveVaultPath(answer);
     try {
-      await validateBoot(answer);
-      vault = answer;
+      await validateBoot(resolved);
+      vault = resolved;
       break;
     } catch (err) {
       lastError =
         err instanceof AppError
           ? err
           : new AppError("BOOT_VALIDATION_FAILED", String(err));
-      await prompts.confirm(
+      const tryAnother = await prompts.confirm(
         `${lastError.message}\nTry another path?`,
       );
+      if (!tryAnother) break;
     }
   }
   if (vault === undefined) {
@@ -110,6 +114,21 @@ export async function runSetup(
   });
 
   return { vault, author: { name, email } };
+}
+
+/**
+ * Expands a leading `~` to the home directory and resolves the result to
+ * an absolute path. A vault path saved as typed (relative, or with `~`
+ * left unexpanded) breaks once supermemory is later launched from a
+ * different cwd, or rejects `~` outright since it is shell syntax, not
+ * filesystem syntax.
+ */
+function resolveVaultPath(raw: string): string {
+  if (raw === "~") return os.homedir();
+  if (raw.startsWith("~/") || raw.startsWith("~\\")) {
+    return path.resolve(os.homedir(), raw.slice(2));
+  }
+  return path.resolve(raw);
 }
 
 async function readGitIdentity(
