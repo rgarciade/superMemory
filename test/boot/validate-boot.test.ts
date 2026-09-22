@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, rm, writeFile, readFile, mkdtemp } from "node:fs/promises";
+import { mkdir, rm, symlink, writeFile, readFile, mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { validateBoot, appRepoRoot } from "../../src/boot/validate-boot.js";
+import {
+  validateBoot,
+  appRepoRoot,
+  assertVaultOutsideAppRepo,
+} from "../../src/boot/validate-boot.js";
 import { AppError } from "../../src/util/errors.js";
 import { createTestVault } from "../helpers/create-test-vault.js";
 
@@ -106,6 +110,36 @@ describe("validateBoot — one negative fixture per check", () => {
       const err = await expectBootFailure(vault.root);
       expect(err.code).toBe("FORMAT_VERSION_UNSUPPORTED");
       expect(err.message).toContain("format 2.x");
+    } finally {
+      await vault.cleanup();
+    }
+  });
+});
+
+// Finding #1 [RED first]: isInsideDir(parent, child) returned false for
+// equal paths, so check 4 let `vaultPath === appRoot` through — e.g.
+// `supermemory init` (defaults to ".") run from the app repo root. Both
+// the direct-equality case and a symlink alias must be rejected.
+describe("assertVaultOutsideAppRepo", () => {
+  it("rejects the app repo root itself, not just paths nested inside it", () => {
+    expect(() => assertVaultOutsideAppRepo(appRepoRootPath)).toThrow(AppError);
+  });
+
+  it("a symlink alias of the app repo root cannot bypass the guard (realpath resolution)", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sm-symlink-approot-"));
+    const link = path.join(dir, "app-alias");
+    try {
+      await symlink(appRepoRootPath, link, "dir");
+      expect(() => assertVaultOutsideAppRepo(link)).toThrow(AppError);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not throw for a vault genuinely outside the app repo", async () => {
+    const vault = await createTestVault();
+    try {
+      expect(() => assertVaultOutsideAppRepo(vault.root)).not.toThrow();
     } finally {
       await vault.cleanup();
     }

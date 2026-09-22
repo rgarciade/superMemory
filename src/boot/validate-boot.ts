@@ -1,10 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 import { AppError } from "../util/errors.js";
-import { isInsideDir } from "../util/paths.js";
+import { isSameOrInsideDir } from "../util/paths.js";
 import { checkFormatVersion } from "../rules/version.js";
 
 /**
@@ -60,16 +60,9 @@ export async function validateBoot(
     );
   }
 
-  // (4) not inside the supermemory source repository — guards against
-  // committing private team notes to the public app repo.
-  const appRoot = appRepoRoot();
-  if (isInsideDir(appRoot, vaultPath)) {
-    throw new AppError(
-      "BOOT_VALIDATION_FAILED",
-      `vault "${vaultPath}" is inside the supermemory source repository (${appRoot}) — vaults must not live inside the app repo, or private notes end up committed to a public repository.`,
-      { hint: "Move the vault outside the app repository (e.g. ~/memory-vault) and point setup at it." },
-    );
-  }
+  // (4) not inside (or equal to) the supermemory source repository —
+  // guards against committing private team notes to the public app repo.
+  assertVaultOutsideAppRepo(vaultPath);
 
   // (5) supported format_version (same check boot and sync share)
   let content: string;
@@ -91,6 +84,37 @@ export async function validateBoot(
   );
 
   return { ok: true };
+}
+
+/**
+ * Throws when `vaultPath` IS the supermemory source repository root, or
+ * lives inside it. Both sides are resolved with `realpathSync` — a bare
+ * string/prefix comparison (or `isInsideDir`'s "the parent itself is
+ * not inside" contract, used as-is) would let a symlink alias, a case
+ * variant, or `vaultPath === appRoot` (e.g. `supermemory init` run from
+ * the app repo root, defaulting to ".") through undetected. Callable
+ * standalone so callers that must write nothing to disk before this
+ * guard passes (e.g. `initVault`) can run it first.
+ */
+export function assertVaultOutsideAppRepo(vaultPath: string): void {
+  const appRoot = realpathSync(appRepoRoot());
+  let resolvedVaultPath: string;
+  try {
+    resolvedVaultPath = realpathSync(vaultPath);
+  } catch (err) {
+    throw new AppError(
+      "BOOT_VALIDATION_FAILED",
+      `vault path "${vaultPath}" could not be resolved.`,
+      { cause: err },
+    );
+  }
+  if (isSameOrInsideDir(appRoot, resolvedVaultPath)) {
+    throw new AppError(
+      "BOOT_VALIDATION_FAILED",
+      `vault "${vaultPath}" is inside the supermemory source repository (${appRoot}) — vaults must not live inside the app repo, or private notes end up committed to a public repository.`,
+      { hint: "Move the vault outside the app repository (e.g. ~/memory-vault) and point setup at it." },
+    );
+  }
 }
 
 /**

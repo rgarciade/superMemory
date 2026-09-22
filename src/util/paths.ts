@@ -41,3 +41,18 @@ export function isInsideDir(parent: string, child: string): boolean {
   if (rel === "") return false; // the parent itself is not "inside"
   return !rel.startsWith("..") && !path.isAbsolute(rel);
 }
+
+/**
+ * True when `child` IS `parent` (both resolved), or is strictly inside
+ * it. Distinct from `isInsideDir`: callers that must refuse a vault
+ * living AT the guarded root, not merely nested under it (e.g. "not
+ * inside the app source repo"), need this — `isInsideDir("/repo",
+ * "/repo")` is `false` by design (that function's own contract), which
+ * would silently let `vaultPath === appRoot` through.
+ */
+export function isSameOrInsideDir(parent: string, child: string): boolean {
+  const resolvedParent = path.resolve(parent);
+  const resolvedChild = path.resolve(child);
+  if (resolvedParent === resolvedChild) return true;
+  return isInsideDir(resolvedParent, resolvedChild);
+}
