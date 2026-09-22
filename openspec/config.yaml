@@ -1,0 +1,46 @@
+# openspec/config.yaml — SDD bootstrap for superMemory
+schema: spec-driven
+
+context: |
+  Project: supermemory — local MCP server giving AI agents structured,
+  validated, searchable access to a git-synced Markdown knowledge vault
+  (source: docs/RFC.md v1.2).
+  Stack: Node.js LTS, TypeScript, @modelcontextprotocol/sdk, zod,
+  simple-git, gray-matter, better-sqlite3.
+  Architecture: stateless MCP server; rules-as-markdown ontology
+  (.memory/rules.md); one sync engine shared by CLI and server;
+  SQLite derived index (FTS5 + properties + link graph).
+  Key invariants: vault is the single source of truth; the app stores
+  no memories; never silently delete.
+  Testing: no test runner yet — the first implementation change
+  establishes one (vitest is the likely candidate).
+
+# no test runner exists at init time; re-evaluate and flip to true
+# once vitest is wired in
+strict_tdd: false
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Map MVP scope to RFC §12 milestones (M1/M2/M3) when applicable
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+  apply:
+    guidelines:
+      - Follow existing code patterns
+      - Derive conventions from docs/RFC.md until code exists
+    tdd: false           # flip to true (RED-GREEN-REFACTOR) when tests land
+    test_command: ""     # to be set when vitest is established
+  verify:
+    test_command: ""
+    build_command: ""    # to be set when package.json exists (npm run build)
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas
