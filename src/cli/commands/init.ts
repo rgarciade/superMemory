@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
 import { simpleGit, type SimpleGit } from "simple-git";
@@ -262,64 +262,72 @@ export async function initVault(vaultPath: string): Promise<InitResult> {
   // discovering the problem only at the post-write validateBoot call.
   assertVaultOutsideAppRepo(vaultPath);
 
-  // scaffold .memory/ — config.yml and templates are never clobbered if
-  // they somehow already exist (write-if-absent); rules.md is always
-  // fresh here (guarded by check 3 above).
-  const memoryDir = path.join(vaultPath, ".memory");
-  const templatesDir = path.join(memoryDir, "templates");
-  await mkdir(templatesDir, { recursive: true });
-
-  const writtenPaths: string[] = [rulesPath];
-  await writeFile(rulesPath, RULES_MD, "utf8");
-
-  const configPath = path.join(memoryDir, "config.yml");
-  await writeIfAbsent(configPath, CONFIG_YML);
-  writtenPaths.push(configPath);
-
-  for (const [name, content] of Object.entries(TEMPLATES)) {
-    const templatePath = path.join(templatesDir, name);
-    await writeIfAbsent(templatePath, content);
-    writtenPaths.push(templatePath);
-  }
-
-  // default folders (conflicts/ top-level: visible in Obsidian)
-  for (const folder of DEFAULT_FOLDERS) {
-    const folderPath = path.join(vaultPath, folder);
-    await mkdir(folderPath, { recursive: true });
-    const gitkeepPath = path.join(folderPath, ".gitkeep");
-    await writeIfAbsent(gitkeepPath, "");
-    writtenPaths.push(gitkeepPath);
-  }
-
-  // vault-level git files — merge missing lines into any pre-existing
-  // file instead of overwriting it (a vault root may already have its
-  // own .gitignore/.gitattributes for unrelated reasons).
-  const gitignorePath = path.join(vaultPath, ".gitignore");
-  await mergeMissingLines(gitignorePath, VAULT_GITIGNORE);
-  writtenPaths.push(gitignorePath);
-
-  const gitattributesPath = path.join(vaultPath, ".gitattributes");
-  await mergeMissingLines(gitattributesPath, GITATTRIBUTES);
-  writtenPaths.push(gitattributesPath);
-
-  // validate the fresh vault (five checks), then make the initial
-  // commit — staging ONLY the scaffold paths we just wrote, never
-  // `git add .` (which would also stage anything else sitting
-  // untracked in the vault, previously-ignored files included).
+  // From here on, every write is tracked so a failure can roll back
+  // EXACTLY what this run did — nothing pre-existing, ever (a vault's
+  // `.memory/` may already hold unrelated content even without
+  // rules.md; the write-if-absent guarantee above must hold even when
+  // the run fails partway through).
+  const tracker = newScaffoldTracker();
   try {
+    const memoryDir = path.join(vaultPath, ".memory");
+    const templatesDir = path.join(memoryDir, "templates");
+    await ensureDir(templatesDir, tracker);
+
+    const writtenPaths: string[] = [rulesPath];
+    await writeFile(rulesPath, RULES_MD, "utf8");
+    tracker.createdFiles.push(rulesPath);
+
+    const configPath = path.join(memoryDir, "config.yml");
+    await writeIfAbsent(configPath, CONFIG_YML, tracker);
+    writtenPaths.push(configPath);
+
+    for (const [name, content] of Object.entries(TEMPLATES)) {
+      const templatePath = path.join(templatesDir, name);
+      await writeIfAbsent(templatePath, content, tracker);
+      writtenPaths.push(templatePath);
+    }
+
+    // default folders (conflicts/ top-level: visible in Obsidian)
+    for (const folder of DEFAULT_FOLDERS) {
+      const folderPath = path.join(vaultPath, folder);
+      await ensureDir(folderPath, tracker);
+      const gitkeepPath = path.join(folderPath, ".gitkeep");
+      await writeIfAbsent(gitkeepPath, "", tracker);
+      writtenPaths.push(gitkeepPath);
+    }
+
+    // vault-level git files — merge missing lines into any pre-existing
+    // file instead of overwriting it (a vault root may already have its
+    // own .gitignore/.gitattributes for unrelated reasons); the
+    // original bytes are captured so a rollback can restore them.
+    const gitignorePath = path.join(vaultPath, ".gitignore");
+    await mergeMissingLines(gitignorePath, VAULT_GITIGNORE, tracker);
+    writtenPaths.push(gitignorePath);
+
+    const gitattributesPath = path.join(vaultPath, ".gitattributes");
+    await mergeMissingLines(gitattributesPath, GITATTRIBUTES, tracker);
+    writtenPaths.push(gitattributesPath);
+
+    // validate the fresh vault (five checks), then make the initial
+    // commit — staging ONLY the scaffold paths we just wrote, never
+    // `git add .` (which would also stage anything else sitting
+    // untracked in the vault, previously-ignored files included).
     await validateBoot(vaultPath);
     const git = simpleGit(vaultPath);
-    const relativePaths = writtenPaths.map((p) => path.relative(vaultPath, p));
+    const relativePaths = [
+      ...new Set(writtenPaths.map((p) => path.relative(vaultPath, p))),
+    ];
+    tracker.stagedRelativePaths = relativePaths;
     await commitInitScaffold(git, relativePaths, INIT_COMMIT_MESSAGE);
   } catch (err) {
-    await rollbackScaffold(memoryDir);
+    await rollbackScaffold(vaultPath, tracker);
     if (err instanceof AppError) throw err;
     const reason = err instanceof Error ? err.message : String(err);
     throw new AppError(
       "BOOT_VALIDATION_FAILED",
-      `the initial commit failed in "${vaultPath}": ${reason}`,
+      `initializing the vault at "${vaultPath}" failed: ${reason}`,
       {
-        hint: "The scaffold was rolled back — fix the underlying issue (e.g. git identity: git config user.name / user.email, or a rejecting commit hook) and re-run `supermemory init`.",
+        hint: "Everything this run created was removed and anything it staged was unstaged (pre-existing content was never touched) — fix the underlying issue (e.g. git identity: git config user.name / user.email, a rejecting commit hook, or a file permission) and re-run `supermemory init`.",
         cause: err,
       },
     );
@@ -328,40 +336,127 @@ export async function initVault(vaultPath: string): Promise<InitResult> {
   return { committed: true, root: vaultPath };
 }
 
+/**
+ * Records exactly what one `initVault` run creates or changes, so a
+ * failure can roll back precisely that — never anything that
+ * pre-existed. Tracked, not swept: `rm(".memory", {recursive:true})`
+ * (the previous approach) would delete any unrelated content a vault's
+ * `.memory/` already held (notes, a hand-written config.yml, ...).
+ */
+interface ScaffoldTracker {
+  /** Absolute paths of directories this run created. */
+  createdDirs: string[];
+  /** Absolute paths of files this run created from scratch. */
+  createdFiles: string[];
+  /**
+   * Absolute paths of files this run wrote via merge, with the original
+   * content captured before the write — `undefined` means the file did
+   * not exist and was created fresh (rollback deletes it); a string
+   * means it existed and is restored verbatim (rollback never merges
+   * again — it puts back exactly the original bytes).
+   */
+  mergedFiles: Array<{ path: string; original: string | undefined }>;
+  /** Relative paths (from the vault root) this run staged with `git add`. */
+  stagedRelativePaths: string[];
+}
+
+function newScaffoldTracker(): ScaffoldTracker {
+  return { createdDirs: [], createdFiles: [], mergedFiles: [], stagedRelativePaths: [] };
+}
+
+/**
+ * Ensures `dirPath` (and any missing parents) exist, recording only the
+ * directories this call actually created — a pre-existing ancestor is
+ * never recorded, so rollback can never remove it.
+ */
+async function ensureDir(dirPath: string, tracker: ScaffoldTracker): Promise<void> {
+  const missing: string[] = [];
+  let current = dirPath;
+  while (!existsSync(current)) {
+    missing.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  if (missing.length > 0) {
+    await mkdir(dirPath, { recursive: true });
+    tracker.createdDirs.push(...missing);
+  }
+}
+
 /** Writes `content` to `filePath` only if it does not already exist. */
-async function writeIfAbsent(filePath: string, content: string): Promise<void> {
+async function writeIfAbsent(
+  filePath: string,
+  content: string,
+  tracker: ScaffoldTracker,
+): Promise<void> {
   if (existsSync(filePath)) return;
   await writeFile(filePath, content, "utf8");
+  tracker.createdFiles.push(filePath);
 }
 
 /**
  * Writes `content` to `filePath` if it does not exist; otherwise
- * appends only the lines from `content` that are not already present,
- * so a pre-existing file (e.g. a vault root's own `.gitignore`) never
- * loses its own entries.
+ * appends only the lines from `content` that are not already
+ * effectively present, so a pre-existing file (e.g. a vault root's own
+ * `.gitignore`) never loses its own entries. The original bytes are
+ * captured into `tracker` before any write, so a rollback can restore
+ * them exactly (never re-running the merge).
+ *
+ * "Effectively present" is negation-aware (gitignore semantics: a later
+ * `!line` un-ignores an earlier `line`) — only the LAST occurrence among
+ * a line and its negation decides whether it is still in effect, so a
+ * negated entry is treated as missing and re-appended. The file's own
+ * existing line ending (LF or CRLF) is preserved for the appended lines.
  */
-async function mergeMissingLines(filePath: string, content: string): Promise<void> {
-  if (!existsSync(filePath)) {
+async function mergeMissingLines(
+  filePath: string,
+  content: string,
+  tracker: ScaffoldTracker,
+): Promise<void> {
+  const existed = existsSync(filePath);
+  const original = existed ? await readFile(filePath, "utf8") : undefined;
+  tracker.mergedFiles.push({ path: filePath, original });
+
+  if (original === undefined) {
     await writeFile(filePath, content, "utf8");
     return;
   }
-  const existing = await readFile(filePath, "utf8");
-  const existingLines = new Set(
-    existing
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0),
-  );
-  const missingLines = content
+
+  const eol = original.includes("\r\n") ? "\r\n" : "\n";
+  const existingLines = original.split(/\r\n|\n/).map((line) => line.trim());
+  const requiredLines = content
     .split("\n")
-    .filter((line) => line.trim().length > 0 && !existingLines.has(line.trim()));
+    .map((line) => line.replace(/\r$/, "").trim())
+    .filter((line) => line.length > 0);
+
+  const missingLines = requiredLines.filter(
+    (line) => !isEffectivelyPresent(existingLines, line),
+  );
   if (missingLines.length === 0) return;
-  const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+
+  const separator = original.length > 0 && !original.endsWith(eol) ? eol : "";
   await writeFile(
     filePath,
-    `${existing}${separator}${missingLines.join("\n")}\n`,
+    `${original}${separator}${missingLines.join(eol)}${eol}`,
     "utf8",
   );
+}
+
+/**
+ * True when `target` is in effect in `existingLines`: its LAST
+ * occurrence (among itself and its `!target` negation) must be the
+ * positive form. Absent entirely, or last-negated, counts as NOT
+ * present (so it gets re-appended).
+ */
+function isEffectivelyPresent(existingLines: string[], target: string): boolean {
+  const negated = `!${target}`;
+  let present = false;
+  for (const line of existingLines) {
+    if (line === target) present = true;
+    else if (line === negated) present = false;
+  }
+  return present;
 }
 
 /**
@@ -392,13 +487,60 @@ export async function commitInitScaffold(
 }
 
 /**
- * Best-effort rollback of the `.memory/` scaffold after a failed
- * post-write guard (validateBoot) or a failed initial commit, so a
- * re-run resumes cleanly instead of being refused by check 3
- * ("already has .memory/rules.md") over a half-committed attempt.
+ * Rolls back exactly what this `initVault` run did — and nothing else
+ * — after a failed write, a failed `validateBoot`, or a failed initial
+ * commit, so a re-run resumes cleanly instead of being refused by
+ * check 3 ("already has .memory/rules.md") over a half-finished
+ * attempt. Every step is best-effort: rollback must make as much
+ * progress as possible even if an individual step fails (e.g. a file
+ * already gone).
  */
-async function rollbackScaffold(memoryDir: string): Promise<void> {
-  await rm(memoryDir, { recursive: true, force: true });
+async function rollbackScaffold(
+  vaultPath: string,
+  tracker: ScaffoldTracker,
+): Promise<void> {
+  // 1. Unstage exactly what this run staged. `git reset -q -- <paths>`
+  //    (no ref) never references HEAD, so it is safe on an unborn
+  //    branch (a repo with no commits yet) too.
+  if (tracker.stagedRelativePaths.length > 0) {
+    try {
+      const git = simpleGit(vaultPath);
+      await git.raw(["reset", "-q", "--", ...tracker.stagedRelativePaths]);
+    } catch {
+      // best-effort — proceed with the filesystem rollback regardless
+    }
+  }
+
+  // 2. Restore (pre-existing) or delete (created fresh) every merged
+  //    file — never re-runs the merge.
+  for (const { path: filePath, original } of tracker.mergedFiles) {
+    try {
+      if (original === undefined) {
+        await rm(filePath, { force: true });
+      } else {
+        await writeFile(filePath, original, "utf8");
+      }
+    } catch {
+      // best-effort
+    }
+  }
+
+  // 3. Delete every file this run created from scratch.
+  for (const filePath of tracker.createdFiles) {
+    await rm(filePath, { force: true }).catch(() => undefined);
+  }
+
+  // 4. Delete every directory this run created, deepest first, and
+  //    ONLY if it is now empty — a directory that still holds anything
+  //    (pre-existing content, or content this run didn't create) is
+  //    left exactly as-is. `rmdir` itself already refuses a non-empty
+  //    directory (ENOTEMPTY); the try/catch just makes that silent.
+  const deepestFirst = [...new Set(tracker.createdDirs)].sort(
+    (a, b) => b.split(path.sep).length - a.split(path.sep).length,
+  );
+  for (const dirPath of deepestFirst) {
+    await rmdir(dirPath).catch(() => undefined);
+  }
 }
 
 export function registerInitCommand(program: Command): void {
