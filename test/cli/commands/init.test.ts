@@ -601,7 +601,7 @@ describe("initVault — commits only the scaffold, ignoring pre-staged changes",
 describe("commitInitScaffold", () => {
   it("throws when git resolves the commit with no commit hash (nothing actually committed)", async () => {
     const fakeGit = {
-      add: async () => undefined,
+      raw: async () => "",
       commit: async () => ({
         author: null,
         branch: "",
@@ -618,7 +618,7 @@ describe("commitInitScaffold", () => {
 
   it("succeeds when git resolves the commit with a real commit hash", async () => {
     const fakeGit = {
-      add: async () => undefined,
+      raw: async () => "",
       commit: async () => ({
         author: null,
         branch: "main",
@@ -631,6 +631,27 @@ describe("commitInitScaffold", () => {
     await expect(
       commitInitScaffold(fakeGit, ["a"], "chore: test"),
     ).resolves.toBeUndefined();
+  });
+
+  it("stages with -f (a scaffold path can be matched by core.excludesFile)", async () => {
+    const rawCalls: string[][] = [];
+    const fakeGit = {
+      raw: async (args: string[]) => {
+        rawCalls.push(args);
+        return "";
+      },
+      commit: async () => ({
+        author: null,
+        branch: "main",
+        commit: "abc1234",
+        root: true,
+        summary: { changes: 1, insertions: 1, deletions: 0 },
+      }),
+    } as unknown as SimpleGit;
+
+    await commitInitScaffold(fakeGit, ["a", "b"], "chore: test");
+
+    expect(rawCalls).toContainEqual(["add", "-f", "--", "a", "b"]);
   });
 });
 
@@ -909,6 +930,36 @@ describe("initVault — refuses scaffold paths that are symlinks", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
       await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Third remediation batch, W5 [RED first]: `git add` without `-f`
+// refuses (exit 1, not a silent skip) a path matched by
+// `core.excludesFile` — with a global excludes file listing "logs",
+// init always failed, since `logs` is one of the default folders.
+// Reproduced with a LOCAL (never global) core.excludesFile on a
+// disposable test repo, matching the same mechanism.
+describe("initVault — stages the scaffold with -f (core.excludesFile can match a default folder)", () => {
+  it("succeeds even when core.excludesFile matches one of the default folders", async () => {
+    const root = await freshGitRepo("excludesfile");
+    const excludesDir = await mkdtemp(path.join(os.tmpdir(), "sm-excludes-"));
+    const excludesFile = path.join(excludesDir, "excludes.txt");
+    try {
+      await writeFile(excludesFile, "logs\n", "utf8");
+      const git = simpleGit(root);
+      await git.addConfig("core.excludesFile", excludesFile);
+
+      const result = await initVault(root);
+      expect(result.committed).toBe(true);
+
+      const boot = await validateBoot(root);
+      expect(boot.ok).toBe(true);
+      const status = await git.status();
+      expect(status.isClean()).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(excludesDir, { recursive: true, force: true });
     }
   });
 });

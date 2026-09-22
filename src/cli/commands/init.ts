@@ -704,7 +704,14 @@ export async function commitInitScaffold(
   relativePaths: string[],
   message: string,
 ): Promise<void> {
-  await git.add(relativePaths);
+  // `-f`: a scaffold path can be matched by `core.excludesFile` (a
+  // default folder like `logs` is a plausible entry in one) — without
+  // it, `git add` REFUSES (exit 1, not a silent skip) instead of
+  // staging the path, so init would always fail for any vault whose
+  // excludes file happens to match a scaffold path. Still only ever
+  // the explicit scaffold paths (`relativePaths`), never a directory
+  // glob that could pull in unrelated user files.
+  await git.raw(["add", "-f", "--", ...relativePaths]);
   const result = await git.commit(message, relativePaths);
   if (!result.commit) {
     throw new Error(
