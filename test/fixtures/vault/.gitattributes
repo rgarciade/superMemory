@@ -1,2 +1,4 @@
-logs/**     merge=union     # append-only: both sides concatenated
-index/**    merge=ours      # generated: regenerating after merge is fine
+# append-only: both sides concatenated
+logs/**     merge=union
+# generated: regenerating after merge is fine
+index/**    merge=ours
