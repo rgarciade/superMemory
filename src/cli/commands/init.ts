@@ -274,8 +274,7 @@ export async function initVault(vaultPath: string): Promise<InitResult> {
     await ensureDir(templatesDir, tracker);
 
     const writtenPaths: string[] = [rulesPath];
-    await writeFile(rulesPath, RULES_MD, "utf8");
-    tracker.createdFiles.push(rulesPath);
+    await createFile(rulesPath, RULES_MD, tracker);
 
     const configPath = path.join(memoryDir, "config.yml");
     await writeIfAbsent(configPath, CONFIG_YML, tracker);
@@ -379,20 +378,68 @@ async function ensureDir(dirPath: string, tracker: ScaffoldTracker): Promise<voi
     current = parent;
   }
   if (missing.length > 0) {
-    await mkdir(dirPath, { recursive: true });
+    // Register BEFORE creating: `mkdir(..., {recursive:true})` can
+    // create some of `missing` and then fail partway (e.g. ENOSPC) —
+    // if the push happened after, rollback would never learn about
+    // whatever was actually created on disk.
     tracker.createdDirs.push(...missing);
+    await mkdir(dirPath, { recursive: true });
   }
 }
 
-/** Writes `content` to `filePath` only if it does not already exist. */
+/**
+ * Creates `filePath` fresh — exclusive create (`wx`: fails instead of
+ * overwriting if the path already exists, closing the TOCTOU race
+ * between an `existsSync` check and the write). Registers the path in
+ * the tracker BEFORE writing: a write that fails partway through (e.g.
+ * EFBIG under a file-size rlimit, ENOSPC, a quota) still leaves
+ * SOMETHING on disk at `filePath` (a truncated file), and the tracker
+ * must know about it regardless of how far the write got, or rollback
+ * leaves a truncated scaffold file behind that then blocks every
+ * re-run ("already has rules.md").
+ */
+async function createFile(
+  filePath: string,
+  content: string,
+  tracker: ScaffoldTracker,
+): Promise<void> {
+  tracker.createdFiles.push(filePath);
+  await writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
+}
+
+/**
+ * Writes `content` to `filePath` only if it does not already exist —
+ * checked AND enforced atomically via the `wx` flag (see `createFile`),
+ * not just an `existsSync` check followed by a separate write.
+ */
 async function writeIfAbsent(
   filePath: string,
   content: string,
   tracker: ScaffoldTracker,
 ): Promise<void> {
   if (existsSync(filePath)) return;
-  await writeFile(filePath, content, "utf8");
   tracker.createdFiles.push(filePath);
+  try {
+    await writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
+  } catch (err) {
+    if (isEexist(err)) {
+      // Lost the race: something else created this exact path between
+      // our existsSync check and the write. Treat it exactly like
+      // "already existed" — untrack it, touch nothing.
+      tracker.createdFiles.pop();
+      return;
+    }
+    throw err;
+  }
+}
+
+function isEexist(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "EEXIST"
+  );
 }
 
 /**

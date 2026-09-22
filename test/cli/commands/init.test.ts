@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { simpleGit } from "simple-git";
 import { AppError } from "../../../src/util/errors.js";
 import { initVault, commitInitScaffold } from "../../../src/cli/commands/init.js";
@@ -13,6 +16,8 @@ import {
   FIXTURE_VAULT_DIR,
 } from "../../helpers/create-test-vault.js";
 import type { SimpleGit } from "simple-git";
+
+const execFileAsync = promisify(execFile);
 
 // Task 1.17 [RED first]: init scaffolds .memory/ (rules v1 + git tunable
 // seed, templates, config.yml), folders incl. top-level conflicts/,
@@ -618,4 +623,67 @@ describe("commitInitScaffold", () => {
       commitInitScaffold(fakeGit, ["a"], "chore: test"),
     ).resolves.toBeUndefined();
   });
+});
+
+// Third remediation batch, W1 [RED first]: a path is only registered in
+// the tracker AFTER its write succeeds, so a write that fails
+// mid-file (EFBIG under `ulimit -f`, ENOSPC, a quota) leaves a
+// truncated file the rollback doesn't know about — every re-run is
+// then refused ("already has rules.md"). Real, OS-level repro: spawn a
+// real `initVault` run (via tsx, so no build step is required) under a
+// shell-level file-size rlimit small enough that writing rules.md
+// (2.2 KB) overflows it.
+describe("initVault — a write failure mid-file does not leave an untracked truncated file", () => {
+  const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
+  const tsxBin = path.join(repoRoot, "node_modules", ".bin", "tsx");
+  const initModuleUrl = pathToFileURL(
+    path.join(repoRoot, "src", "cli", "commands", "init.ts"),
+  ).href;
+
+  async function writeHarness(dir: string): Promise<string> {
+    const harnessPath = path.join(dir, "harness.mjs");
+    const script = [
+      `const { initVault } = await import(${JSON.stringify(initModuleUrl)});`,
+      "const vaultPath = process.argv[2];",
+      "try {",
+      "  const result = await initVault(vaultPath);",
+      '  process.stdout.write("OK " + JSON.stringify(result));',
+      "} catch (err) {",
+      '  process.stdout.write("ERR " + (err && err.code ? err.code : "") + " " + (err && err.message ? err.message : String(err)));',
+      "}",
+    ].join("\n");
+    await writeFile(harnessPath, script, "utf8");
+    return harnessPath;
+  }
+
+  it("a write cut short by a file-size limit (EFBIG) is rolled back, and a re-run succeeds", async () => {
+    const root = await freshGitRepo("efbig");
+    const harnessDir = await mkdtemp(path.join(os.tmpdir(), "sm-efbig-harness-"));
+    try {
+      const harnessPath = await writeHarness(harnessDir);
+      // RULES_MD is ~2.2 KB; `ulimit -f 2` caps writes well under that,
+      // so the write into rules.md fails partway through with EFBIG.
+      const { stdout } = await execFileAsync("sh", [
+        "-c",
+        `ulimit -f 2 && exec "${tsxBin}" "${harnessPath}" "${root}"`,
+      ]);
+      expect(stdout).toContain("ERR");
+      expect(stdout).toContain("EFBIG");
+
+      // the truncated file must not survive: the tracker must have
+      // known about it BEFORE the write, so rollback can remove it.
+      expect(existsSync(path.join(root, ".memory", "rules.md"))).toBe(false);
+      expect(existsSync(path.join(root, ".memory"))).toBe(false);
+
+      // a re-run (no rlimit this time) must succeed — nothing left
+      // behind to trip check 3 ("already has rules.md").
+      const result = await initVault(root);
+      expect(result.committed).toBe(true);
+      const boot = await validateBoot(root);
+      expect(boot.ok).toBe(true);
+    } finally {
+      await rm(harnessDir, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 20000);
 });
