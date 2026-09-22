@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import pkg from "../../package.json" with { type: "json" };
 import { AppError } from "../util/errors.js";
 import { registerInitCommand } from "./commands/init.js";
@@ -63,17 +64,12 @@ export async function runMain(
   }
 }
 
-interface CommanderExit extends Error {
-  code?: string;
-  exitCode?: number;
-}
-
-function isCommanderExit(err: unknown): err is CommanderExit {
-  return (
-    err instanceof Error &&
-    "code" in err &&
-    typeof (err as CommanderExit).code === "string"
-  );
+function isCommanderExit(err: unknown): err is CommanderError {
+  // Must be a real CommanderError, not merely "any Error with a string
+  // `code`" — Node fs errors (EACCES, ENOSPC, ENOTDIR, ...) also carry a
+  // string `code` and must fall through to the generic error path so
+  // their message reaches stderr instead of being silently swallowed.
+  return err instanceof CommanderError;
 }
 
 async function main(): Promise<void> {
@@ -82,10 +78,29 @@ async function main(): Promise<void> {
   process.exitCode = exitCode;
 }
 
-// Run only when executed as the bin (node dist/cli/index.js / tsx src/cli/index.ts).
-const invokedAsBin =
-  process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(process.argv[1]).href;
-if (invokedAsBin) {
+/**
+ * True when this module was invoked directly as the CLI entry point
+ * (`node dist/cli/index.js`, `tsx src/cli/index.ts`), including through
+ * an npm bin symlink (global install, `npx`, `npm link`,
+ * `node_modules/.bin`). Node resolves `import.meta.url` to the module's
+ * realpath, but `argv[1]` keeps the path as invoked (the symlink) — so
+ * `argv1` is resolved to its realpath before comparing, or the two would
+ * never match and the CLI would silently no-op.
+ */
+export function isInvokedAsBin(
+  argv1: string | undefined,
+  moduleUrl: string,
+): boolean {
+  if (argv1 === undefined) return false;
+  let resolvedArgv1: string;
+  try {
+    resolvedArgv1 = realpathSync(argv1);
+  } catch {
+    return false;
+  }
+  return moduleUrl === pathToFileURL(resolvedArgv1).href;
+}
+
+if (isInvokedAsBin(process.argv[1], import.meta.url)) {
   await main();
 }
