@@ -88,7 +88,7 @@ PR-1 follow-up (lands after the phase gate; supersedes the SQLite parts of 1.2 a
 
 Index capability (`src/index` owns the in-memory store; all reads go through `queries.ts` — design OD-5):
 
-- [ ] 2.1 `src/index/types.ts` + `src/index/store.ts` — `IndexedNote`/`QueryFilters`/result shapes; the in-memory structures: notes by id and by path, property lookups (`type`/`status`/`spec_id`/`tags`/`owner`/dates), body text for scanning, and the forward/backward link graph (wikilinks + `spec_id`). No I/O in this module — it is a data structure with explicit inputs [index].
+- [x] 2.1 `src/index/types.ts` + `src/index/store.ts` — `IndexedNote`/`QueryFilters`/result shapes; the in-memory structures: notes by id and by path, property lookups (`type`/`status`/`spec_id`/`tags`/`owner`/dates), body text for scanning, and the forward/backward link graph (wikilinks + `spec_id`). No I/O in this module — it is a data structure with explicit inputs [index]. — done: commit `1ee07ae`; 9/9 (RED: module missing).
 - [ ] 2.2 `src/index/build.ts` — `buildIndex(vaultPath, rules)`: walk the vault's Markdown, parse each note with `gray-matter` (via `notes/parse.ts` derivation for id/title), populate the store. Asserts: nothing is written to disk (no index artifact anywhere in the vault, `git status` clean after a build) and two builds over the same vault yield identical query results (restart identity) [index].
 - [ ] 2.3 `src/index/upsert.ts` — incremental update without a rebuild: `upsertNote(store, note)` for the save path (saved/updated note immediately visible to `find` and backlink queries, no restart), and `reparseFiles(store, vaultPath, paths[])` for changes that arrive on disk — the post-pull case, where git names the changed files. Asserts: unchanged notes are not re-read; deletions drop the note and its link edges [index].
 - [ ] 2.4 `src/index/queries.ts` — the only query surface: property filters (`type`/`status`/`spec_id`/`tags`/`owner`/date-range), free-text search over note bodies, combined filter+text (filters narrow first), and backlinks over the wikilink + `spec_id` graph. Deterministic result ordering (no relevance ranking — OD-5 states the tradeoff); no other module touches the store [index].
@@ -96,7 +96,7 @@ Index capability (`src/index` owns the in-memory store; all reads go through `qu
 
 Notes & save pipeline:
 
-- [ ] 2.6 `src/notes/parse.ts` — gray-matter parse; deterministic id/title derivation (first `#` heading → `title` frontmatter → filename slug) shared by save, grammar, and index [tool-catalog].
+- [x] 2.6 `src/notes/parse.ts` — gray-matter parse; deterministic id/title derivation (first `#` heading → `title` frontmatter → filename slug) shared by save, grammar, and index [tool-catalog]. — done (this commit; implemented ahead of 2.2–2.5 — `index/build.ts` depends on it): 10/10 (RED: module missing).
 - [ ] 2.7 `src/notes/linked-knowledge.ts` — spec hub Linked Knowledge section maintenance: appended on create, idempotent entries keyed by note id (repeated saves never duplicate) [tool-catalog].
 - [ ] 2.8 `src/notes/save-pipeline.ts` — validate → render/merge → pull-before-write via injected `SyncPort` (null impl in P2) → write → `index.upsert` → `SyncPort.notifyWrite` → `{ path, id }` [tool-catalog].
 
