@@ -196,6 +196,10 @@ Attempted `git archive <sha> \| tar -x -C <mktemp>` + a symlinked `node_modules`
 
 Same deferred list as batches 1–2.
 
+## Known follow-ups
+
+- [x] **W4 regression — symlinked vault root wrongly refused.** A final scoped review (MERGEABLE, PR #1) found that the W4 symlink guard (`assertNoScaffoldSymlinks`) put `vaultPath` itself in its `lstat` candidates, so `init <link>` was refused while `init <link>/` and `cd <link> && init .` both succeeded (reproduced) — blocking a common setup (a vault symlinked into iCloud/Dropbox) via a check that was trivially bypassed anyway. A symlinked root is not the threat W4 guards against: writes through it land inside the real vault either way. Fixed in a 4th remediation commit: `initVault` now resolves the vault root once via `realpathSync.native` and uses that resolved root for every downstream guard, write, and git operation (including the returned `InitResult.root`); the symlink guard no longer checks the root itself, only scaffold paths and default folders below it (`.memory`, `.memory/templates`, `config.yml`, `logs/`, `.gitignore`, etc. — still refused). See the commit log for the exact SHA.
+
 ## Remaining tasks
 
 - Phase 2 (2.1–2.18): SQLite index + MCP tool catalog — PR-2, separate apply run on a branch stacked on this one.

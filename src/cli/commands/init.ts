@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { lstat, mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
@@ -237,15 +237,26 @@ export interface InitResult {
   preexistingUntouched: string[];
 }
 
-export async function initVault(vaultPath: string): Promise<InitResult> {
+export async function initVault(vaultPathArg: string): Promise<InitResult> {
   // (1) the target must be an existing directory
-  if (!existsSync(vaultPath)) {
+  if (!existsSync(vaultPathArg)) {
     throw new AppError(
       "BOOT_VALIDATION_FAILED",
-      `vault path "${vaultPath}" does not exist.`,
+      `vault path "${vaultPathArg}" does not exist.`,
       { hint: "Create (or clone) the vault directory first: mkdir + git init, or git clone <vault-url>." },
     );
   }
+
+  // Resolve the vault ROOT to its real path once — every guard, write,
+  // and git operation below uses this resolved path. A symlinked vault
+  // root is not the threat the scaffold-symlink guard (5) exists for:
+  // writes through it land inside the real vault either way, so
+  // refusing it only broke a common setup (a vault symlinked into
+  // iCloud/Dropbox) while being trivially bypassed by a trailing slash
+  // or `cd <link> && init .` anyway. `realpathSync.native` also
+  // case-corrects on a case-insensitive-but-case-preserving filesystem
+  // (see assertVaultOutsideAppRepo).
+  const vaultPath = realpathSync.native(vaultPathArg);
 
   // (2) it must already be a git repository
   if (!existsSync(path.join(vaultPath, ".git"))) {
@@ -446,12 +457,18 @@ export function newScaffoldTracker(): ScaffoldTracker {
  * never follows symlinks (unlike `existsSync`/`stat`), so this is the
  * only reliable way to detect one; a path that does not exist yet is
  * not a problem (`lstat` throws ENOENT, treated as "nothing to guard").
+ *
+ * Deliberately does NOT check `vaultPath` itself: the caller has
+ * already resolved it to its real path, so it can never be a symlink
+ * by construction, and a symlinked vault root is not the threat this
+ * guard exists for anyway (writes through it land inside the real
+ * vault) — only scaffold paths and default folders BELOW the root are
+ * checked.
  */
 async function assertNoScaffoldSymlinks(vaultPath: string): Promise<void> {
   const memoryDir = path.join(vaultPath, ".memory");
   const templatesDir = path.join(memoryDir, "templates");
   const candidates = new Set<string>([
-    vaultPath,
     memoryDir,
     templatesDir,
     path.join(memoryDir, "rules.md"),

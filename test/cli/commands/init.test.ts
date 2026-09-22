@@ -6,6 +6,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -1151,6 +1152,85 @@ describe("initVault — commits only what this run created or changed", () => {
       ).toBe(customTemplate);
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// Fourth remediation (W4 regression) [RED first]: the W4 symlink guard
+// put `vaultPath` itself in the lstat candidates, so a symlinked VAULT
+// ROOT was refused — `init <link>` failed while `init <link>/` and
+// `cd <link> && init .` both succeeded (existsSync-based checks follow
+// symlinks; only the direct-path lstat caught it). A symlinked root is
+// not the threat W4 guards against — writes through it land inside the
+// real vault — and refusing it breaks a common setup (a vault
+// symlinked into iCloud/Dropbox) while being trivially bypassed
+// anyway. Resolve the root once (realpath) and use it throughout;
+// scaffold paths and parents BELOW the root must still be refused.
+describe("initVault — accepts a symlinked vault root, still refuses symlinked scaffold paths below it", () => {
+  it("init <link> succeeds and commits land in the real target", async () => {
+    const realRoot = await freshGitRepo("symlink-root-real");
+    const linkDir = await mkdtemp(path.join(os.tmpdir(), "sm-symlink-root-link-"));
+    const link = path.join(linkDir, "vault-link");
+    try {
+      await symlink(realRoot, link);
+
+      const result = await initVault(link);
+
+      expect(result.committed).toBe(true);
+      expect(result.root).toBe(await realpath(realRoot));
+
+      // the commit actually landed in the REAL directory, not just
+      // "somewhere reachable through the link".
+      expect(existsSync(path.join(realRoot, ".memory", "rules.md"))).toBe(true);
+      const boot = await validateBoot(realRoot);
+      expect(boot.ok).toBe(true);
+      const git = simpleGit(realRoot);
+      const log = await git.log();
+      expect(log.total).toBe(1);
+    } finally {
+      await rm(linkDir, { recursive: true, force: true });
+      await rm(realRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("init <link>/ (trailing slash) succeeds the same way, with a resolved root", async () => {
+    const realRoot = await freshGitRepo("symlink-root-real-slash");
+    const linkDir = await mkdtemp(path.join(os.tmpdir(), "sm-symlink-root-link2-"));
+    const link = path.join(linkDir, "vault-link");
+    try {
+      await symlink(realRoot, link);
+
+      const result = await initVault(`${link}/`);
+
+      expect(result.committed).toBe(true);
+      expect(result.root).toBe(await realpath(realRoot));
+      expect(existsSync(path.join(realRoot, ".memory", "rules.md"))).toBe(true);
+    } finally {
+      await rm(linkDir, { recursive: true, force: true });
+      await rm(realRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("a symlinked .memory UNDER a symlinked root is still refused", async () => {
+    const realRoot = await freshGitRepo("symlink-root-inner-guard");
+    const linkDir = await mkdtemp(path.join(os.tmpdir(), "sm-symlink-root-link3-"));
+    const link = path.join(linkDir, "vault-link");
+    const outsideDir = await mkdtemp(path.join(os.tmpdir(), "sm-symlink-outside4-"));
+    try {
+      await symlink(realRoot, link);
+      const outsideTarget = path.join(outsideDir, "config.yml");
+      await mkdir(path.join(realRoot, ".memory"), { recursive: true });
+      await symlink(outsideTarget, path.join(realRoot, ".memory", "config.yml"));
+
+      await expect(initVault(link)).rejects.toBeInstanceOf(AppError);
+
+      // the real vault root itself is fine (that's not what's refused)
+      // — it's the inner scaffold symlink that must still be caught.
+      expect(existsSync(outsideTarget)).toBe(false);
+    } finally {
+      await rm(linkDir, { recursive: true, force: true });
+      await rm(realRoot, { recursive: true, force: true });
+      await rm(outsideDir, { recursive: true, force: true });
     }
   });
 });
