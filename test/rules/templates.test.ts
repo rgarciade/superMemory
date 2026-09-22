@@ -18,13 +18,13 @@ describe("renderTemplate", () => {
       spec_id: "SPEC-search",
       today: "2025-06-01",
       author: "Raul",
-      title: "FTS5 instead of embeddings",
+      title: "In-memory index instead of embeddings",
     });
     expect(rendered).toContain("decision_id: DEC-0042");
     expect(rendered).toContain("spec_id: SPEC-search");
     expect(rendered).toContain("date: 2025-06-01");
     expect(rendered).toContain("author: Raul");
-    expect(rendered).toContain("# FTS5 instead of embeddings");
+    expect(rendered).toContain("# In-memory index instead of embeddings");
     // no token for a supplied key remains
     expect(rendered).not.toMatch(/\{\{(next_id|spec_id|today|author|title)\}\}/);
   });

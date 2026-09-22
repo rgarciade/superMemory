@@ -22,7 +22,6 @@
   "dependencies": {
     "@inquirer/prompts": "^8.7.2",
     "@modelcontextprotocol/sdk": "1.30.0",
-    "better-sqlite3": "^13.0.3",
     "commander": "^15.0.0",
     "gray-matter": "^4.0.3",
     "simple-git": "^3.36.0",
@@ -30,7 +29,6 @@
     "zod": "~3.25.76"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.20.4",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",

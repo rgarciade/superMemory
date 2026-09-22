@@ -60,8 +60,8 @@ export interface TestVault {
   /** Git handle with fixed dates + local identity already configured. */
   git: SimpleGit;
   /**
-   * Register a closeable (e.g. a better-sqlite3 Database handle) that must
-   * be closed before the tree is deleted on cleanup.
+   * Register a closeable (e.g. a file handle or watcher) that must be
+   * closed before the tree is deleted on cleanup.
    */
   onClose(close: () => void): void;
   /** Write a file inside the vault (mkdir -p on parent). */
