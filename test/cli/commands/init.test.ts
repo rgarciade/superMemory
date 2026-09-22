@@ -769,3 +769,64 @@ describe("initVault — rollback restores the exact index entry the user had sta
     }
   });
 });
+
+// Third remediation batch, W3 [RED first]: mergeMissingLines and the
+// rollback restore path read/wrote merged files as UTF-8 TEXT. A raw
+// non-UTF8 byte (e.g. Latin-1 0xE9, "é") is not valid UTF-8 on its
+// own, so decoding-then-reencoding it turns it into the UTF-8
+// replacement sequence EF BF BD — corrupting the byte permanently, on
+// BOTH the success path (what gets committed) and the rollback path
+// (what gets "restored").
+describe("initVault — merges and restores raw bytes, never re-encodes them", () => {
+  const LATIN1_BYTE = 0xe9; // 'é' in Latin-1 — not valid standalone UTF-8
+  const REPLACEMENT_CHAR_UTF8 = Buffer.from([0xef, 0xbf, 0xbd]);
+
+  function buildLatin1Gitignore(): Buffer {
+    return Buffer.concat([
+      Buffer.from("caf", "ascii"),
+      Buffer.from([LATIN1_BYTE]),
+      Buffer.from(".txt\n", "ascii"),
+    ]);
+  }
+
+  it("a rolled-back merge restores the exact original bytes (no UTF-8 re-encoding)", async () => {
+    const root = await freshGitRepo("bytes-rollback");
+    try {
+      const original = buildLatin1Gitignore();
+      await writeFile(path.join(root, ".gitignore"), original);
+
+      await mkdir(path.join(root, ".git", "hooks"), { recursive: true });
+      const hookPath = path.join(root, ".git", "hooks", "pre-commit");
+      await writeFile(hookPath, "#!/bin/sh\nexit 1\n", "utf8");
+      await chmod(hookPath, 0o755);
+
+      await expect(initVault(root)).rejects.toBeInstanceOf(AppError);
+
+      const restored = await readFile(path.join(root, ".gitignore"));
+      expect(restored.equals(original)).toBe(true);
+      expect(restored.includes(REPLACEMENT_CHAR_UTF8)).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a successful merge preserves the pre-existing bytes unchanged and only appends the missing lines", async () => {
+    const root = await freshGitRepo("bytes-success");
+    try {
+      const original = buildLatin1Gitignore();
+      await writeFile(path.join(root, ".gitignore"), original);
+
+      const result = await initVault(root);
+      expect(result.committed).toBe(true);
+
+      const merged = await readFile(path.join(root, ".gitignore"));
+      expect(merged.subarray(0, original.length).equals(original)).toBe(true);
+      expect(merged.includes(REPLACEMENT_CHAR_UTF8)).toBe(false);
+      // the appended scaffold entry is still present (real merge, not
+      // just "leave it alone")
+      expect(merged.includes(Buffer.from(".memory/cache/", "ascii"))).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

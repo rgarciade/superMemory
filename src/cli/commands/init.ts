@@ -350,12 +350,13 @@ interface ScaffoldTracker {
   createdFiles: string[];
   /**
    * Absolute paths of files this run wrote via merge, with the original
-   * content captured before the write — `undefined` means the file did
-   * not exist and was created fresh (rollback deletes it); a string
+   * RAW BYTES captured before the write (never decoded as text, so a
+   * non-UTF8 byte is never corrupted) — `undefined` means the file did
+   * not exist and was created fresh (rollback deletes it); a `Buffer`
    * means it existed and is restored verbatim (rollback never merges
    * again — it puts back exactly the original bytes).
    */
-  mergedFiles: Array<{ path: string; original: string | undefined }>;
+  mergedFiles: Array<{ path: string; original: Buffer | undefined }>;
   /** Relative paths (from the vault root) this run staged with `git add`. */
   stagedRelativePaths: string[];
   /**
@@ -473,6 +474,14 @@ function isEexist(err: unknown): boolean {
  * captured into `tracker` before any write, so a rollback can restore
  * them exactly (never re-running the merge).
  *
+ * Operates on raw bytes (`Buffer`), never decodes the existing file as
+ * UTF-8 text: a byte that is not valid UTF-8 on its own (e.g. a Latin-1
+ * 0xE9) would otherwise be silently and irreversibly turned into the
+ * UTF-8 replacement character on read, corrupting it in both the
+ * merged output that gets committed and whatever a rollback "restores".
+ * `content` (our own scaffold template) is always plain ASCII, so
+ * comparing/appending it as bytes is exact either way.
+ *
  * "Effectively present" is negation-aware (gitignore semantics: a later
  * `!line` un-ignores an earlier `line`) — only the LAST occurrence among
  * a line and its negation decides whether it is still in effect, so a
@@ -485,7 +494,7 @@ async function mergeMissingLines(
   tracker: ScaffoldTracker,
 ): Promise<void> {
   const existed = existsSync(filePath);
-  const original = existed ? await readFile(filePath, "utf8") : undefined;
+  const original = existed ? await readFile(filePath) : undefined;
   tracker.mergedFiles.push({ path: filePath, original });
 
   if (original === undefined) {
@@ -494,37 +503,73 @@ async function mergeMissingLines(
   }
 
   const eol = original.includes("\r\n") ? "\r\n" : "\n";
-  const existingLines = original.split(/\r\n|\n/).map((line) => line.trim());
+  const eolBuf = Buffer.from(eol, "ascii");
+  const existingLines = splitLinesRaw(original);
   const requiredLines = content
     .split("\n")
     .map((line) => line.replace(/\r$/, "").trim())
     .filter((line) => line.length > 0);
 
   const missingLines = requiredLines.filter(
-    (line) => !isEffectivelyPresent(existingLines, line),
+    (line) => !isEffectivelyPresentRaw(existingLines, line),
   );
   if (missingLines.length === 0) return;
 
-  const separator = original.length > 0 && !original.endsWith(eol) ? eol : "";
+  const needsSeparator = original.length > 0 && !bufferEndsWith(original, eolBuf);
+  const appended = Buffer.from(missingLines.join(eol) + eol, "utf8");
   await writeFile(
     filePath,
-    `${original}${separator}${missingLines.join(eol)}${eol}`,
-    "utf8",
+    needsSeparator ? Buffer.concat([original, eolBuf, appended]) : Buffer.concat([original, appended]),
   );
 }
 
+/** Splits `buf` on raw `\n` bytes, trimming a trailing `\r` and ASCII space/tab from each line — never decodes the bytes as text. */
+function splitLinesRaw(buf: Buffer): Buffer[] {
+  const lines: Buffer[] = [];
+  let start = 0;
+  for (let i = 0; i < buf.length; i += 1) {
+    if (buf[i] === 0x0a) {
+      lines.push(trimLineRaw(buf.subarray(start, i)));
+      start = i + 1;
+    }
+  }
+  if (start < buf.length) lines.push(trimLineRaw(buf.subarray(start)));
+  return lines;
+}
+
+function trimLineRaw(line: Buffer): Buffer {
+  let end = line.length;
+  if (end > 0 && line[end - 1] === 0x0d) end -= 1; // trailing CR (CRLF line)
+  let start = 0;
+  while (start < end && isAsciiBlank(line[start]!)) start += 1;
+  while (end > start && isAsciiBlank(line[end - 1]!)) end -= 1;
+  return line.subarray(start, end);
+}
+
+function isAsciiBlank(byte: number): boolean {
+  return byte === 0x20 || byte === 0x09;
+}
+
+function bufferEndsWith(buf: Buffer, suffix: Buffer): boolean {
+  if (suffix.length === 0) return true;
+  if (buf.length < suffix.length) return false;
+  return buf.subarray(buf.length - suffix.length).equals(suffix);
+}
+
 /**
- * True when `target` is in effect in `existingLines`: its LAST
+ * True when `target` (one of our own plain-ASCII scaffold lines) is in
+ * effect among `existingLines` (raw byte lines from the file): its LAST
  * occurrence (among itself and its `!target` negation) must be the
  * positive form. Absent entirely, or last-negated, counts as NOT
  * present (so it gets re-appended).
  */
-function isEffectivelyPresent(existingLines: string[], target: string): boolean {
-  const negated = `!${target}`;
+function isEffectivelyPresentRaw(existingLines: Buffer[], target: string): boolean {
+  const targetBuf = Buffer.from(target, "utf8");
+  const negatedBuf = Buffer.from(`!${target}`, "utf8");
   let present = false;
   for (const line of existingLines) {
-    if (line === target) present = true;
-    else if (line === negated) present = false;
+    if (line.equals(targetBuf)) present = true;
+    else if (line.equals(negatedBuf)) present = false;
   }
   return present;
 }
@@ -649,7 +694,7 @@ async function rollbackScaffold(
       if (original === undefined) {
         await rm(filePath, { force: true });
       } else {
-        await writeFile(filePath, original, "utf8");
+        await writeFile(filePath, original); // raw bytes — never re-encoded
       }
     } catch {
       // best-effort
