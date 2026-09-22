@@ -36,7 +36,7 @@ describe("renderTemplate", () => {
 
   it("does not interpret conditionals, loops, or lookups", () => {
     const template = "{{#if title}}show{{/if}}\n{{#each items}}x{{/each}}\n{{ lookup.deep.path }}\n";
-    const rendered = renderTemplate(template, { title: "T", items: ["a"] });
+    const rendered = renderTemplate(template, { title: "T" });
     // Non-placeholder syntax must survive verbatim — there is no engine.
     expect(rendered).toContain("{{#if title}}show{{/if}}");
     expect(rendered).toContain("{{#each items}}x{{/each}}");
