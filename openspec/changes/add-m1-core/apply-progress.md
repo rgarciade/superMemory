@@ -3,30 +3,32 @@
 Phase: apply (PR-1 slice) · Branch: `add-m1-core/pr1-scaffold-rules-boot` (stacked-to-main)
 Scope of this apply run: **Phase 0 (0.1) + Phase 1 (1.1–1.19) only** — the PR-1 work unit of the chained delivery (PR-2 = Phase 2, PR-3 = Phase 3 come in separate runs).
 
+**Note on commit SHAs below**: git history for this branch was rewritten (author email correction) after the table below was first written. All SHAs in this file are the post-rewrite (current) SHAs.
+
 ## Completed tasks
 
 | Task | Commit | Summary |
 |---|---|---|
-| 0.1 | `4f68c63` (main) | Baseline `chore: baseline docs + openspec` — docs/RFC.md, openspec/, .gitignore (D2: `.atl/` + `.pi/`), README note. One commit, clean tree; branch cut from it. |
-| 1.1 | `b2d6c0a` | Package scaffold (ESM/NodeNext, engines ≥22, bin→dist/cli/index.js, files:[dist], no exports map), tsconfigs, vitest wired (no globals), `.env.example`, runner-proof test. |
-| 1.2 | `b4e907f` | Runtime deps with OD-2 verification. Trio: SDK **1.30.0 exact** · zod **3.25.76 (~)** · better-sqlite3 **13.0.3 (^)**. SDK peers `zod ^3.25 \|\| ^4.0` → both satisfy → rule picked 3. Dry-run 186 pkgs, 0 conflicts, no `--legacy-peer-deps`. Prebuilds bundled in-package (no node-gyp). FTS5 smoke on Node v22.23.2 (sqlite 3.53.4). |
-| 1.3 | `92f590a` | D3: `strict_tdd: true`, `apply.tdd: true`, test/build commands backfilled in openspec/config.yaml. vitest 5 renamed `testMatch`→`include` (same semantics — noted deviation from design §1.7's literal key). |
-| 1.4 | `4df509a`/`045167c` | `createTestVault()` + committed fixture vault (rules.md v1, 5 templates, config.yml, .gitattributes, folders incl. conflicts/). |
-| 1.5 | `045167c` | `createRemote()` (bare in tmp), `createClone()`, `createDivergentClones()` (fetch keeps origin/main current), `withTestEnv()`. |
-| 1.6 | `20d960d` | `AppError { code, message, hint }` + the eight stable codes; `NO_VAULT_CONFIGURED_MESSAGE` exact. |
-| 1.7 | `06c8c58` | `Clock`/`TimerPort` ports (unref'd production timers — OD-4), stderr-only logger (SUPERMEMORY_LOG_LEVEL), `.memory` path helpers. |
-| 1.8 | `9a89d3a` | `checkFormatVersion`: same-major accepted, other majors refused naming the required version + update path. |
-| 1.9 | `5722cb0` | `RulesModel` + rules.md v1 parser: fenced YAML blocks (`note_types`/`lifecycle`/`conflict_policy_defaults`/`git`), located `RULES_PARSE_ERROR` (block + file line area), no partial model, unknown blocks tolerated, `loadRules()`. |
-| 1.10 | `5767eb8` | `renderTemplate` — pure `{{placeholder}}` interpolation, no logic/lookups. |
-| 1.11 | `ddfa813` | `validateNote` — required/types/enums/patterns/naming/folder, every issue names the violated rule (design §3 single-owner boundary). |
-| 1.12 | `a10d471` | `EnvSource` port + typed SUPERMEMORY_* reads; global config.json under `SUPERMEMORY_CONFIG_DIR` \| `~/.config/supermemory`. |
-| 1.13 | `58467be` | `loadVaultConfig` + `resolveSyncTunables` precedence env > config.yml `sync:` > rules `git:` > built-ins (15 min/45 s), per-knob; timing knobs only. |
-| 1.14 | `af795d2` | `probeSqlite()` FTS5 probe with the exact OD-3 wording contract; passing test doubles as better-sqlite3 ESM-interop proof; `docs/TROUBLESHOOTING.md` (#fts5). |
-| 1.15 | `985332c` | `validateBoot` five ordered fail-fast checks incl. inside-app-repo guard (`appRepoRoot()` walk) and format_version via 1.8. |
-| 1.16 | `3f81ce1` | Commander program: `buildProgram`, `runMain` (exitOverride; AppError→stderr+exit 1; help/version paths), shebang + bin guard; init/setup registrations (stubs). |
-| 1.17 | `d1c2602` | `initVault`: full scaffold (rules v1 + git tunable seed, templates, config.yml, folders incl. top-level conflicts/, vault .gitignore, .gitattributes), validateBoot, exactly one `chore(supermemory): initialize vault` commit; drift-pinned byte-equal to the fixture. |
-| 1.18 | `44ca455` | `runSetup` wizard behind `PromptPort` seam: validated vault path (re-prompt), author identity (defaults from vault git config), writes `vaults.default` + author. |
-| 1.19 | (this commit) | Phase gate: `npm test` **120/120 across 21 files**; `npm run typecheck` clean; `npm run build` clean (dist/cli/index.js, shebang preserved); hermeticity guards `test/p1/gate.test.ts`. |
+| 0.1 | `a1fd6be` (main) | Baseline `chore: baseline docs + openspec` — docs/RFC.md, openspec/, .gitignore (D2: `.atl/` + `.pi/`), README note. One commit, clean tree; branch cut from it. |
+| 1.1 | `6594e56` | Package scaffold (ESM/NodeNext, engines ≥22, bin→dist/cli/index.js, files:[dist], no exports map), tsconfigs, vitest wired (no globals), `.env.example`, runner-proof test. |
+| 1.2 | `925bcd4` | Runtime deps with OD-2 verification. Trio: SDK **1.30.0 exact** · zod **3.25.76 (~)** · better-sqlite3 **13.0.3 (^)**. SDK peers `zod ^3.25 \|\| ^4.0` → both satisfy → rule picked 3. Dry-run 186 pkgs, 0 conflicts, no `--legacy-peer-deps`. Prebuilds bundled in-package (no node-gyp). FTS5 smoke on Node v22.23.2 (sqlite 3.53.4). |
+| 1.3 | `59768a5` | D3: `strict_tdd: true`, `apply.tdd: true`, test/build commands backfilled in openspec/config.yaml. vitest 5 renamed `testMatch`→`include` (same semantics — noted deviation from design §1.7's literal key). |
+| 1.4 | `a3e2fe1`/`65c17da` | `createTestVault()` + committed fixture vault (rules.md v1, 5 templates, config.yml, .gitattributes, folders incl. conflicts/). |
+| 1.5 | `65c17da` | `createRemote()` (bare in tmp), `createClone()`, `createDivergentClones()` (fetch keeps origin/main current), `withTestEnv()`. |
+| 1.6 | `ecfe9a0` | `AppError { code, message, hint }` + the eight stable codes; `NO_VAULT_CONFIGURED_MESSAGE` exact. |
+| 1.7 | `dd9d507` | `Clock`/`TimerPort` ports (unref'd production timers — OD-4), stderr-only logger (SUPERMEMORY_LOG_LEVEL), `.memory` path helpers. |
+| 1.8 | `0943e9a` | `checkFormatVersion`: same-major accepted, other majors refused naming the required version + update path. |
+| 1.9 | `df7c9d8` | `RulesModel` + rules.md v1 parser: fenced YAML blocks (`note_types`/`lifecycle`/`conflict_policy_defaults`/`git`), located `RULES_PARSE_ERROR` (block + file line area), no partial model, unknown blocks tolerated, `loadRules()`. |
+| 1.10 | `b08fecc` | `renderTemplate` — pure `{{placeholder}}` interpolation, no logic/lookups. |
+| 1.11 | `c77c30c` | `validateNote` — required/types/enums/patterns/naming/folder, every issue names the violated rule (design §3 single-owner boundary). |
+| 1.12 | `b0beba0` | `EnvSource` port + typed SUPERMEMORY_* reads; global config.json under `SUPERMEMORY_CONFIG_DIR` \| `~/.config/supermemory`. |
+| 1.13 | `6b95cf4` | `loadVaultConfig` + `resolveSyncTunables` precedence env > config.yml `sync:` > rules `git:` > built-ins (15 min/45 s), per-knob; timing knobs only. |
+| 1.14 | `34deeeb` | `probeSqlite()` FTS5 probe with the exact OD-3 wording contract; passing test doubles as better-sqlite3 ESM-interop proof; `docs/TROUBLESHOOTING.md` (#fts5). |
+| 1.15 | `92bc9c6` | `validateBoot` five ordered fail-fast checks incl. inside-app-repo guard (`appRepoRoot()` walk) and format_version via 1.8. |
+| 1.16 | `3e58c32` | Commander program: `buildProgram`, `runMain` (exitOverride; AppError→stderr+exit 1; help/version paths), shebang + bin guard; init/setup registrations (stubs). |
+| 1.17 | `b6c4246` | `initVault`: full scaffold (rules v1 + git tunable seed, templates, config.yml, folders incl. top-level conflicts/, vault .gitignore, .gitattributes), validateBoot, exactly one `chore(supermemory): initialize vault` commit; drift-pinned byte-equal to the fixture. |
+| 1.18 | `206c7b9` | `runSetup` wizard behind `PromptPort` seam: validated vault path (re-prompt), author identity (defaults from vault git config), writes `vaults.default` + author. |
+| 1.19 | `b15322e` | Phase gate: `npm test` **120/120 across 21 files**; `npm run typecheck` clean; `npm run build` clean (dist/cli/index.js, shebang preserved); hermeticity guards `test/p1/gate.test.ts`. |
 
 ## TDD Cycle Evidence (strict_tdd active from 1.4 onward)
 
@@ -58,6 +60,13 @@ Scope of this apply run: **Phase 0 (0.1) + Phase 1 (1.1–1.19) only** — the P
 - `test/`: `helpers/` (create-test-vault, create-remote, env), `fixtures/vault/**`, `util/`, `rules/`, `config/`, `boot/`, `cli/`, `p1/gate.test.ts`, `scaffold.test.ts`
 - Modified: `.gitignore`, `openspec/config.yaml`, `openspec/changes/add-m1-core/tasks.md`, this file
 
+### Remediation batch — additional files changed
+
+- Created: `test/setup/git-env.ts` (vitest `setupFiles` entry — process-wide git config isolation, plus opt-in `buildHermeticGitEnv`), `test/setup/git-env.test.ts`
+- Modified: `src/cli/index.ts`, `src/util/paths.ts`, `src/boot/validate-boot.ts`, `src/cli/commands/init.ts`, `src/cli/commands/setup.ts`, `src/rules/validate.ts`, `vitest.config.ts`
+- Modified (tests): `test/cli/index.test.ts`, `test/util/paths.test.ts`, `test/boot/validate-boot.test.ts`, `test/cli/commands/init.test.ts`, `test/cli/commands/setup.test.ts`, `test/rules/validate.test.ts`, `test/p1/gate.test.ts`
+- Modified (docs): `openspec/changes/add-m1-core/tasks.md` (SHA refresh only), this file (SHA refresh + remediation section)
+
 ## Deviations from design
 
 1. **vitest 5 `include` instead of `testMatch`** (1.1/1.3) — vitest 5 removed `testMatch`; same semantics.
@@ -66,6 +75,43 @@ Scope of this apply run: **Phase 0 (0.1) + Phase 1 (1.1–1.19) only** — the P
 4. **YAML unquoted `format_version: 1.0` parses as number** (1.9) — `checkFormatVersion` accepts `string | number`; `normalizeFormatVersion` renders integers with one decimal (1 → "1.0").
 5. **TypeScript 5.9 line instead of latest 7.x** (1.1) — TS 7 (native compiler) is too fresh for the vitest/tsx toolchain; design named no version.
 6. **`esModuleInterop: true` added** (1.9) — required for NodeNext default-imports of CJS deps (`gray-matter`, `better-sqlite3`); matches Node runtime semantics.
+
+## Remediation batch (post-review fixes, PR-1 slice)
+
+A fresh-context pre-PR review blocked this PR on 8 findings (2 CRITICAL, 6 WARNING). All 8 are fixed on this same branch, each as its own RED→GREEN work-unit commit (strict TDD). `npm test` (148/148), `npm run typecheck`, and `npm run build` all pass after every commit in this batch.
+
+| # | Finding | Commit | Fix |
+|---|---|---|---|
+| 1 | CRITICAL — `init` could write into and commit the app repo itself (guard ran post-write; `git add .`; clobbered existing `.gitignore`/`.gitattributes`) | `e15756e` | Guard 4 (not-inside-app-repo) now runs before any write; vault-level `.gitignore`/`.gitattributes` merge missing lines instead of overwriting, `config.yml`/templates are write-if-absent; commit stages exactly the scaffold's relative paths, never `git add "."` |
+| 1 (root cause) | `isInsideDir(parent, child)` returns `false` for equal paths, so check 4 passed for `vaultPath === appRoot` | `7b0cfde` | Added `isSameOrInsideDir` (parent-or-inside) alongside `isInsideDir` (contract unchanged); extracted `assertVaultOutsideAppRepo`, both sides resolved via `realpathSync` so a symlink alias can't bypass it |
+| 2 | CRITICAL — `invokedAsBin` compared `import.meta.url` (realpath) to raw `argv[1]`, so a bin symlink invocation (global install/npx/npm link) silently no-op'd, exit 0 | `b9bf58a` | `isInvokedAsBin` resolves `argv[1]` with `realpathSync` before comparing; regression test goes through a real symlink |
+| 3 | WARNING — `isCommanderExit` matched any `Error` with a string `code`, swallowing Node fs errors (EACCES etc.) as silent exit 1 | `b9bf58a` (same commit as #2 — same function, same review pass) | Narrowed to `err instanceof CommanderError` |
+| 4 | WARNING — failed initial commit left an uncommitted scaffold; re-run refused ("rules.md already exists"); hint always blamed git identity | `e15756e` (same commit as #1 — same commit/rollback code path) | On failure, roll back `.memory/` so a re-run resumes; underlying error message surfaced instead of a blanket guess |
+| 5 | WARNING — `committed: true` hard-coded; simple-git resolves normally (no throw) when there is nothing to commit | `e15756e` (same commit as #1/#4) | Extracted `commitInitScaffold`, throws when the commit result's `commit` hash is empty; unit-tested with a stub `SimpleGit` |
+| 6 | WARNING — date fields rejected gray-matter's `Date` instances (unquoted YAML `date: 2026-09-22` parses as `Date`, not string) | `308a8a4` | `checkFieldType`'s `date` case accepts a valid `Date` instance directly |
+| 7 | WARNING — setup wizard saved the vault path as typed (relative paths break after a cwd change; `~` rejected); "Try another path? No" still re-prompted | `2ad3f5c` | `resolveVaultPath` expands `~` and `path.resolve`s before validating/saving; loop breaks on a `No` answer |
+| 8 | WARNING — test git depended on the developer/CI's own `~/.gitconfig`/`/etc/gitconfig`; `gate.test.ts` failed if `SUPERMEMORY_VAULT` was already exported | `68fdf2e` | New vitest `setupFiles` entry (`test/setup/git-env.ts`) sets `GIT_CONFIG_GLOBAL=/dev/null` + `GIT_CONFIG_NOSYSTEM=1` process-wide (safe: never touches local repo config); two `setup.test.ts` commits given their own local identity; `gate.test.ts` saves/clears/restores `SUPERMEMORY_VAULT` itself |
+
+Grouping note: findings #2+#3 share one commit (same function, `isCommanderExit`/`isInvokedAsBin` sit a few lines apart in `src/cli/index.ts`, discovered in the same review pass — splitting them would have been artificial). Findings #1's init.ts guard-ordering/never-clobber/explicit-staging fix and findings #4/#5 (rollback + real commit-success check) share one commit — they are the same `initVault` commit/rollback code path and cannot be meaningfully separated. All other findings are one commit each.
+
+### TDD Cycle Evidence — remediation batch
+
+| Finding | RED (failing first) | GREEN | Notes |
+|---|---|---|---|
+| 1 (init.ts) | 7 new tests failing: guard-before-write leaked `.memory/` into an app-repo-nested vault; gitignore/gitattributes clobbered; `.env`/`draft.md` got staged; commit-failure message missing the real cause; `commitInitScaffold` undefined | 15/15 | Manually reproduced the "nothing to commit → resolves, no throw" simple-git behavior first (`git.commit()` on an empty `git add .` resolves `{commit:""}`, no throw) before writing the stub-based regression test |
+| 1 (paths/validate-boot) | `isSameOrInsideDir`/`assertVaultOutsideAppRepo` undefined — 6 failing | 18/18 | Confirmed root cause manually first: `isInsideDir(root, root)` → `false` |
+| 2/3 | `isInvokedAsBin` undefined; fs-error test asserted non-empty stderr, got `''` | 11/11 | — |
+| 6 | gray-matter parses unquoted `date: 2026-09-22` as `Date`; validator rejected it (`typeof` check) | 13/13 | — |
+| 7 | relative-path/`~`/decline-loop assertions failed against the old behavior | 6/6 | — |
+| 8 | `git-env.ts` module missing; `gate.test.ts`'s SUPERMEMORY_VAULT test failed when the var was pre-set (reproduced via `git stash` + env var) | 4/4 (git-env) + 3/3 (gate) | Manually reproduced the reported CI failure mode first: `user.useConfigOnly=true` + no identity + isolated env → `fatal: no email was given and auto-detection is disabled`, exit 128 |
+
+### Out of scope (left for a later remediation batch)
+
+- Empty `SUPERMEMORY_CONFIG_DIR=""` writes `config.json` into cwd (`src/config/global-config.ts:19`).
+- Unvalidated timing values from `config.yml`/rules `git:` block (0, negative, NaN sync intervals).
+- Malformed frontmatter throws a raw `YAMLException` instead of `RULES_PARSE_ERROR`.
+- `appRepoRoot()` falls back to `/` if no `package.json` named `supermemory` is found walking up.
+- The check-4 test in `validate-boot.test.ts` creates `tmp-sm-inside-*` directories directly in the repo root without a `.gitignore` entry for that prefix (cleaned up via `finally`, but not gitignored).
 
 ## Remaining tasks
 

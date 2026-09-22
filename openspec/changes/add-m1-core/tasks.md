@@ -32,7 +32,7 @@ Every implementation phase independently exceeds the 400-line review budget (per
 
 ## Phase 0 — Baseline commit (on `main`, before branching)
 
-- [x] 0.1 Baseline commit on `main` — `chore: baseline docs + openspec` (D1): stage `docs/` (RFC.md), `openspec/` (config.yaml + change artifacts), `.gitignore` (D2: `.atl/` stays ignored as machine-local; `.pi/` added), and a minimal `README.md` note that `.atl/` is machine-local. Verify: exactly one commit, clean `git status`. No push — publishing stays user-owned.  — done: root commit `4f68c63`, clean tree; branch `add-m1-core/pr1-scaffold-rules-boot` created from it.
+- [x] 0.1 Baseline commit on `main` — `chore: baseline docs + openspec` (D1): stage `docs/` (RFC.md), `openspec/` (config.yaml + change artifacts), `.gitignore` (D2: `.atl/` stays ignored as machine-local; `.pi/` added), and a minimal `README.md` note that `.atl/` is machine-local. Verify: exactly one commit, clean `git status`. No push — publishing stays user-owned.  — done: root commit `a1fd6be`, clean tree; branch `add-m1-core/pr1-scaffold-rules-boot` created from it.
 
 ## Phase 1 (P1) — Scaffold + rules + CLI onboarding + boot validation (PR-1)
 
