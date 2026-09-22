@@ -330,14 +330,24 @@ export async function initVault(vaultPath: string): Promise<InitResult> {
     tracker.preStageIndexEntries = await snapshotIndexEntries(git, relativePaths);
     await commitInitScaffold(git, relativePaths, INIT_COMMIT_MESSAGE);
   } catch (err) {
-    await rollbackScaffold(vaultPath, tracker);
-    if (err instanceof AppError) throw err;
+    const rollbackIssues = await rollbackScaffold(vaultPath, tracker);
+    const rollbackStatus =
+      rollbackIssues.length === 0
+        ? "Everything this run created was removed and anything it staged was unstaged (pre-existing content was never touched)."
+        : `Rollback could NOT fully undo this run — the following need manual attention: ${describeRollbackIssues(rollbackIssues)}.`;
+
+    if (err instanceof AppError) {
+      throw new AppError(err.code, err.message, {
+        hint: [err.hint, rollbackStatus].filter((part) => part).join(" "),
+        cause: err,
+      });
+    }
     const reason = err instanceof Error ? err.message : String(err);
     throw new AppError(
       "BOOT_VALIDATION_FAILED",
       `initializing the vault at "${vaultPath}" failed: ${reason}`,
       {
-        hint: "Everything this run created was removed and anything it staged was unstaged (pre-existing content was never touched) — fix the underlying issue (e.g. git identity: git config user.name / user.email, a rejecting commit hook, or a file permission) and re-run `supermemory init`.",
+        hint: `${rollbackStatus} Fix the underlying issue (e.g. git identity: git config user.name / user.email, a rejecting commit hook, or a file permission) and re-run \`supermemory init\`.`,
         cause: err,
       },
     );
@@ -353,7 +363,7 @@ export async function initVault(vaultPath: string): Promise<InitResult> {
  * (the previous approach) would delete any unrelated content a vault's
  * `.memory/` already held (notes, a hand-written config.yml, ...).
  */
-interface ScaffoldTracker {
+export interface ScaffoldTracker {
   /** Absolute paths of directories this run created. */
   createdDirs: string[];
   /** Absolute paths of files this run created from scratch. */
@@ -387,7 +397,7 @@ interface IndexEntry {
   sha: string;
 }
 
-function newScaffoldTracker(): ScaffoldTracker {
+export function newScaffoldTracker(): ScaffoldTracker {
   return {
     createdDirs: [],
     createdFiles: [],
@@ -515,12 +525,7 @@ async function writeIfAbsent(
 }
 
 function isEexist(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: unknown }).code === "EEXIST"
-  );
+  return isErrnoCode(err, "EEXIST");
 }
 
 /**
@@ -656,18 +661,39 @@ async function snapshotIndexEntries(
 }
 
 /**
+ * One thing rollback could NOT undo — surfaced to the caller instead of
+ * being silently swallowed, so the final error never falsely claims a
+ * complete rollback.
+ */
+export interface RollbackIssue {
+  path: string;
+  reason: string;
+}
+
+function describeError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Formats a non-empty `RollbackIssue[]` for inclusion in an error message/hint. */
+function describeRollbackIssues(issues: RollbackIssue[]): string {
+  return issues.map((issue) => `${issue.path} (${issue.reason})`).join("; ");
+}
+
+/**
  * Restores the index to exactly its pre-stage state for
  * `relativePaths`: a path that had an entry gets that exact entry back
  * (`update-index --cacheinfo`, no stdin needed, and untouched by
  * whether a HEAD exists); a path that had none is force-removed from
  * the index (`update-index --force-remove`, a safe no-op if it's
- * already absent). Never touches the working tree.
+ * already absent). Never touches the working tree. Returns every path
+ * it could NOT restore, instead of swallowing the error.
  */
 async function restoreIndexEntries(
   git: SimpleGit,
   relativePaths: string[],
   snapshot: Map<string, IndexEntry>,
-): Promise<void> {
+): Promise<RollbackIssue[]> {
+  const issues: RollbackIssue[] = [];
   for (const relPath of relativePaths) {
     const entry = snapshot.get(relPath);
     try {
@@ -680,10 +706,11 @@ async function restoreIndexEntries(
       } else {
         await git.raw(["update-index", "--force-remove", "--", relPath]);
       }
-    } catch {
-      // best-effort
+    } catch (err) {
+      issues.push({ path: relPath, reason: describeError(err) });
     }
   }
+  return issues;
 }
 
 /**
@@ -726,13 +753,19 @@ export async function commitInitScaffold(
  * commit, so a re-run resumes cleanly instead of being refused by
  * check 3 ("already has .memory/rules.md") over a half-finished
  * attempt. Every step is best-effort: rollback must make as much
- * progress as possible even if an individual step fails (e.g. a file
- * already gone).
+ * progress as possible even if an individual step fails.
+ *
+ * Returns every step it could NOT undo (e.g. a file it couldn't delete
+ * because its parent directory became read-only) — the caller MUST
+ * surface these truthfully instead of unconditionally claiming a full
+ * rollback happened.
  */
-async function rollbackScaffold(
+export async function rollbackScaffold(
   vaultPath: string,
   tracker: ScaffoldTracker,
-): Promise<void> {
+): Promise<RollbackIssue[]> {
+  const issues: RollbackIssue[] = [];
+
   // 1. Restore the index to exactly its pre-stage state for whatever
   //    this run staged — NOT `git reset -- <paths>` (resets to HEAD,
   //    which silently drops anything the user had staged that differs
@@ -741,13 +774,15 @@ async function rollbackScaffold(
   if (tracker.stagedRelativePaths.length > 0) {
     try {
       const git = simpleGit(vaultPath);
-      await restoreIndexEntries(
-        git,
-        tracker.stagedRelativePaths,
-        tracker.preStageIndexEntries,
+      issues.push(
+        ...(await restoreIndexEntries(
+          git,
+          tracker.stagedRelativePaths,
+          tracker.preStageIndexEntries,
+        )),
       );
-    } catch {
-      // best-effort — proceed with the filesystem rollback regardless
+    } catch (err) {
+      issues.push({ path: "(git index)", reason: describeError(err) });
     }
   }
 
@@ -760,27 +795,49 @@ async function rollbackScaffold(
       } else {
         await writeFile(filePath, original); // raw bytes — never re-encoded
       }
-    } catch {
-      // best-effort
+    } catch (err) {
+      issues.push({ path: filePath, reason: describeError(err) });
     }
   }
 
   // 3. Delete every file this run created from scratch.
   for (const filePath of tracker.createdFiles) {
-    await rm(filePath, { force: true }).catch(() => undefined);
+    try {
+      await rm(filePath, { force: true });
+    } catch (err) {
+      issues.push({ path: filePath, reason: describeError(err) });
+    }
   }
 
   // 4. Delete every directory this run created, deepest first, and
   //    ONLY if it is now empty — a directory that still holds anything
   //    (pre-existing content, or content this run didn't create) is
-  //    left exactly as-is. `rmdir` itself already refuses a non-empty
-  //    directory (ENOTEMPTY); the try/catch just makes that silent.
+  //    left exactly as-is, and that is NOT a rollback failure: `rmdir`
+  //    refusing a non-empty directory (ENOTEMPTY) — or the directory
+  //    already being gone (ENOENT) — is the expected, correct outcome.
+  //    Anything else (e.g. EACCES) is a genuine issue.
   const deepestFirst = [...new Set(tracker.createdDirs)].sort(
     (a, b) => b.split(path.sep).length - a.split(path.sep).length,
   );
   for (const dirPath of deepestFirst) {
-    await rmdir(dirPath).catch(() => undefined);
+    try {
+      await rmdir(dirPath);
+    } catch (err) {
+      if (isErrnoCode(err, "ENOTEMPTY") || isErrnoCode(err, "ENOENT")) continue;
+      issues.push({ path: dirPath, reason: describeError(err) });
+    }
   }
+
+  return issues;
+}
+
+function isErrnoCode(err: unknown, code: string): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: unknown }).code === code
+  );
 }
 
 export function registerInitCommand(program: Command): void {

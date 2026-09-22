@@ -17,7 +17,12 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { simpleGit } from "simple-git";
 import { AppError } from "../../../src/util/errors.js";
-import { initVault, commitInitScaffold } from "../../../src/cli/commands/init.js";
+import {
+  initVault,
+  commitInitScaffold,
+  newScaffoldTracker,
+  rollbackScaffold,
+} from "../../../src/cli/commands/init.js";
 import { validateBoot, appRepoRoot } from "../../../src/boot/validate-boot.js";
 import { parseRules } from "../../../src/rules/parser.js";
 import {
@@ -960,6 +965,91 @@ describe("initVault — stages the scaffold with -f (core.excludesFile can match
     } finally {
       await rm(root, { recursive: true, force: true });
       await rm(excludesDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Third remediation batch, S1 [RED first]: rollback errors were
+// swallowed (bare `catch {}` / `.catch(() => undefined)`), yet the
+// final hint unconditionally claimed "Everything this run created was
+// removed". Rollback must collect what it could NOT undo and the
+// caller must report it truthfully, keeping the ORIGINAL failure as
+// the primary cause.
+describe("rollbackScaffold — surfaces what it could not undo instead of swallowing it", () => {
+  it("reports a created file it could not delete (EACCES on its parent dir)", async () => {
+    const root = await freshGitRepo("rollback-report-file");
+    const protectedDir = path.join(root, "protected");
+    try {
+      await mkdir(protectedDir);
+      const stuckFile = path.join(protectedDir, "stuck.txt");
+      await writeFile(stuckFile, "x", "utf8");
+      await chmod(protectedDir, 0o500); // r-x: can't delete an entry inside it
+
+      const tracker = newScaffoldTracker();
+      tracker.createdFiles.push(stuckFile);
+
+      const issues = await rollbackScaffold(root, tracker);
+
+      expect(issues.length).toBeGreaterThan(0);
+      expect(issues.some((issue) => issue.path === stuckFile)).toBe(true);
+      // the file really is still there — rollback did NOT silently
+      // "succeed" while actually leaving it behind.
+      expect(existsSync(stuckFile)).toBe(true);
+    } finally {
+      await chmod(protectedDir, 0o700).catch(() => undefined);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns no issues when everything was undone cleanly", async () => {
+    const root = await freshGitRepo("rollback-report-clean");
+    try {
+      const file = path.join(root, "clean.txt");
+      await writeFile(file, "x", "utf8");
+      const tracker = newScaffoldTracker();
+      tracker.createdFiles.push(file);
+
+      const issues = await rollbackScaffold(root, tracker);
+
+      expect(issues).toEqual([]);
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("initVault — a rollback that cannot fully undo itself is reported truthfully", () => {
+  it("a read-only .git (index restore genuinely fails) is listed in the failure, not hidden behind a false success claim", async () => {
+    const root = await freshGitRepo("rollback-truthful-git");
+    try {
+      const git = simpleGit(root);
+      await writeFile(path.join(root, ".gitignore"), "user-staged\n", "utf8");
+      await git.add([".gitignore"]);
+
+      await chmod(path.join(root, ".git"), 0o500);
+
+      let thrown: AppError | undefined;
+      try {
+        await initVault(root);
+        expect.unreachable("must throw");
+      } catch (err) {
+        thrown = err as AppError;
+      } finally {
+        await chmod(path.join(root, ".git"), 0o700);
+      }
+
+      expect(thrown).toBeInstanceOf(AppError);
+      // truthful: must NOT claim a clean, complete rollback when the
+      // index restore for .gitignore actually failed.
+      const combined = `${thrown?.message ?? ""} ${thrown?.hint ?? ""}`;
+      expect(combined).not.toContain(
+        "Everything this run created was removed and anything it staged was unstaged",
+      );
+      expect(combined).toContain(".gitignore");
+    } finally {
+      await chmod(path.join(root, ".git"), 0o700).catch(() => undefined);
+      await rm(root, { recursive: true, force: true });
     }
   });
 });
