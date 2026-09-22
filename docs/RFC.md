@@ -57,7 +57,7 @@ config of pointers.
 ### Non-Goals
 
 - No internal AI: the server never summarizes, embeds, or interprets. Retrieval
-  is structural (FTS5 + property index + link graph). Embeddings may arrive as
+  is structural (full text + property index + link graph). Embeddings may arrive as
   an optional opt-in module later; the default stays deterministic.
 - No proprietary UI. Obsidian (or any editor) is the human UI. Obsidian Bases
   gives humans database views for free over standard frontmatter.
@@ -101,8 +101,9 @@ config of pointers.
 ### Invariants
 
 1. **The vault is the single source of truth.** All notes, rules, and templates
-   are Markdown in the vault repo. The SQLite cache under
-   `.memory/cache/` (gitignored) is a derived index, rebuildable at any time.
+   are Markdown in the vault repo. The search index is derived state held in
+   memory and rebuilt from the vault at every start; `.memory/cache/`
+   (gitignored) holds only transient runtime state, such as the sync lock.
 2. **The app never stores memories.** Outside the vault it writes exactly two
    things: the global config (pointers + author identity) and logs. No notes,
    no copies, no telemetry, no shadow stores. Deleting the app loses nothing.
@@ -139,7 +140,7 @@ Failure is fail-fast with an actionable message.
 │   ├── templates/          # note templates (committed)
 │   ├── config.yml          # sync + policy settings (committed)
 │   ├── local.json          # per-user author identity (gitignored)
-│   └── cache/              # derived SQLite index (gitignored)
+│   └── cache/              # transient runtime state, e.g. sync lock (gitignored)
 ├── specs/                  # living specifications (index hubs)
 ├── decisions/              # ADR-style micro-decisions
 ├── incidents/              # bug / incident records
@@ -314,7 +315,7 @@ descriptions embed the team's own prose rules. All schemas are strict
 
 | Tool | Purpose |
 |---|---|
-| `find` | Structured search over the property index: filters by `type`, `status`, `spec_id`, `tags`, `owner`, date ranges; plus FTS5 free-text. Returns id, title, status, path. |
+| `find` | Structured search over the property index: filters by `type`, `status`, `spec_id`, `tags`, `owner`, date ranges; plus free-text search. Returns id, title, status, path. |
 | `read_with_context` | Returns a note plus: its frontmatter, a summary of backlinks (wikilinks and `spec_id` references), the status/lifecycle info of referenced specs, and the N most recent linked decisions/incidents. Reading a spec gives you its knowledge neighborhood. |
 | `save` | Create/update a note of a declared type. Validates against `rules.md` (required fields, patterns, naming, folder). Rejects non-conforming writes with the violated rule. Maintains the spec's Linked Knowledge section when `spec_id` is set. |
 | `changes_since` | What changed in the vault since a timestamp or "my last session" — the continuity primitive for agents. Diff summary at note granularity (added/updated/status changed). |
@@ -410,7 +411,7 @@ One commit **per write event**, not per tick. Messages are derived
 deterministically from frontmatter — no LLM, no free text from the agent:
 
 ```
-note(add): decision "FTS5 instead of embeddings for search" [DEC-0042]
+note(add): decision "In-memory index instead of embeddings" [DEC-0042]
 
 Author: Raul Garcia
 Via: cursor (claude-sonnet)
@@ -589,8 +590,9 @@ Client integration (written automatically by `supermemory install`):
 ```
 
 Tech stack: Node.js LTS, TypeScript, `@modelcontextprotocol/sdk`, `zod`
-(schemas), `simple-git` (git operations), `gray-matter` (frontmatter),
-`better-sqlite3` (derived index: property tables + FTS5 + link graph).
+(schemas), `simple-git` (git operations), `gray-matter` (frontmatter). The
+derived index (properties + full text + link graph) is in-memory, so the
+package has no native dependencies.
 
 ---
 
@@ -664,7 +666,7 @@ conflict policies is the unoccupied slot.
 - `init`, `setup`, `serve`, `sync` commands; boot validation
 - rules.md parsing (v1 format) + template rendering
 - `find` / `read_with_context` / `save` / `changes_since` / `sync` / `status`
-- SQLite derived index (properties + FTS5 + links), rebuildable
+- In-memory derived index (properties + full text + links), rebuilt at start
 - Sync engine: debounce + interval, pull-rebase, commit grammar, union/ours
   gitattributes, conflict ladder v1 (generated + logs automatic; curated →
   guided `resolve`)
