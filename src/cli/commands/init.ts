@@ -225,6 +225,16 @@ export const INIT_COMMIT_MESSAGE = "chore(supermemory): initialize vault";
 export interface InitResult {
   committed: boolean;
   root: string;
+  /**
+   * Scaffold paths (relative to `root`) that already existed before
+   * this run and were left completely untouched — not written,
+   * merged, staged, or committed. A custom `.memory/config.yml`, an
+   * `index/.gitkeep` with real content, or a `.gitignore` that already
+   * satisfied every required line are examples: init must never
+   * silently commit a file the user has not reviewed just because it
+   * happens to sit at a scaffold path.
+   */
+  preexistingUntouched: string[];
 }
 
 export async function initVault(vaultPath: string): Promise<InitResult> {
@@ -278,6 +288,13 @@ export async function initVault(vaultPath: string): Promise<InitResult> {
   // rules.md; the write-if-absent guarantee above must hold even when
   // the run fails partway through).
   const tracker = newScaffoldTracker();
+  // Only a path THIS RUN actually created or modified is ever staged or
+  // committed (`writtenPaths`) — a scaffold path that already existed
+  // and needed no change is recorded separately (`preexistingPaths`)
+  // and left completely alone: not staged, not committed, just
+  // reported back (declared outside the try block so it survives into
+  // the final return) so the user can review it.
+  const preexistingPaths: string[] = [];
   try {
     const memoryDir = path.join(vaultPath, ".memory");
     const templatesDir = path.join(memoryDir, "templates");
@@ -287,13 +304,17 @@ export async function initVault(vaultPath: string): Promise<InitResult> {
     await createFile(rulesPath, RULES_MD, tracker);
 
     const configPath = path.join(memoryDir, "config.yml");
-    await writeIfAbsent(configPath, CONFIG_YML, tracker);
-    writtenPaths.push(configPath);
+    (await writeIfAbsent(configPath, CONFIG_YML, tracker)
+      ? writtenPaths
+      : preexistingPaths
+    ).push(configPath);
 
     for (const [name, content] of Object.entries(TEMPLATES)) {
       const templatePath = path.join(templatesDir, name);
-      await writeIfAbsent(templatePath, content, tracker);
-      writtenPaths.push(templatePath);
+      (await writeIfAbsent(templatePath, content, tracker)
+        ? writtenPaths
+        : preexistingPaths
+      ).push(templatePath);
     }
 
     // default folders (conflicts/ top-level: visible in Obsidian)
@@ -301,21 +322,29 @@ export async function initVault(vaultPath: string): Promise<InitResult> {
       const folderPath = path.join(vaultPath, folder);
       await ensureDir(folderPath, tracker);
       const gitkeepPath = path.join(folderPath, ".gitkeep");
-      await writeIfAbsent(gitkeepPath, "", tracker);
-      writtenPaths.push(gitkeepPath);
+      (await writeIfAbsent(gitkeepPath, "", tracker)
+        ? writtenPaths
+        : preexistingPaths
+      ).push(gitkeepPath);
     }
 
     // vault-level git files — merge missing lines into any pre-existing
     // file instead of overwriting it (a vault root may already have its
     // own .gitignore/.gitattributes for unrelated reasons); the
-    // original bytes are captured so a rollback can restore them.
+    // original bytes are captured so a rollback can restore them. A
+    // file that already satisfied every required line is untouched —
+    // recorded as pre-existing, not staged/committed either.
     const gitignorePath = path.join(vaultPath, ".gitignore");
-    await mergeMissingLines(gitignorePath, VAULT_GITIGNORE, tracker);
-    writtenPaths.push(gitignorePath);
+    (await mergeMissingLines(gitignorePath, VAULT_GITIGNORE, tracker)
+      ? writtenPaths
+      : preexistingPaths
+    ).push(gitignorePath);
 
     const gitattributesPath = path.join(vaultPath, ".gitattributes");
-    await mergeMissingLines(gitattributesPath, GITATTRIBUTES, tracker);
-    writtenPaths.push(gitattributesPath);
+    (await mergeMissingLines(gitattributesPath, GITATTRIBUTES, tracker)
+      ? writtenPaths
+      : preexistingPaths
+    ).push(gitattributesPath);
 
     // validate the fresh vault (five checks), then make the initial
     // commit — staging ONLY the scaffold paths we just wrote, never
@@ -353,7 +382,11 @@ export async function initVault(vaultPath: string): Promise<InitResult> {
     );
   }
 
-  return { committed: true, root: vaultPath };
+  return {
+    committed: true,
+    root: vaultPath,
+    preexistingUntouched: preexistingPaths.map((p) => path.relative(vaultPath, p)),
+  };
 }
 
 /**
@@ -501,24 +534,29 @@ async function createFile(
 /**
  * Writes `content` to `filePath` only if it does not already exist —
  * checked AND enforced atomically via the `wx` flag (see `createFile`),
- * not just an `existsSync` check followed by a separate write.
+ * not just an `existsSync` check followed by a separate write. Returns
+ * whether this call actually wrote the file: `false` means it already
+ * existed (or a race was lost — see below) and was left completely
+ * untouched, so the caller must never stage/commit it just because it
+ * happens to sit at a scaffold path.
  */
 async function writeIfAbsent(
   filePath: string,
   content: string,
   tracker: ScaffoldTracker,
-): Promise<void> {
-  if (existsSync(filePath)) return;
+): Promise<boolean> {
+  if (existsSync(filePath)) return false;
   tracker.createdFiles.push(filePath);
   try {
     await writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
+    return true;
   } catch (err) {
     if (isEexist(err)) {
       // Lost the race: something else created this exact path between
       // our existsSync check and the write. Treat it exactly like
       // "already existed" — untrack it, touch nothing.
       tracker.createdFiles.pop();
-      return;
+      return false;
     }
     throw err;
   }
@@ -549,19 +587,24 @@ function isEexist(err: unknown): boolean {
  * a line and its negation decides whether it is still in effect, so a
  * negated entry is treated as missing and re-appended. The file's own
  * existing line ending (LF or CRLF) is preserved for the appended lines.
+ *
+ * Returns whether this call actually changed the file's bytes: `false`
+ * means it already existed AND already satisfied every required line
+ * — nothing was written, so the caller must never stage/commit it just
+ * because it happens to sit at a scaffold path.
  */
 async function mergeMissingLines(
   filePath: string,
   content: string,
   tracker: ScaffoldTracker,
-): Promise<void> {
+): Promise<boolean> {
   const existed = existsSync(filePath);
   const original = existed ? await readFile(filePath) : undefined;
   tracker.mergedFiles.push({ path: filePath, original });
 
   if (original === undefined) {
     await writeFile(filePath, content, "utf8");
-    return;
+    return true;
   }
 
   const eol = original.includes("\r\n") ? "\r\n" : "\n";
@@ -575,7 +618,7 @@ async function mergeMissingLines(
   const missingLines = requiredLines.filter(
     (line) => !isEffectivelyPresentRaw(existingLines, line),
   );
-  if (missingLines.length === 0) return;
+  if (missingLines.length === 0) return false;
 
   const needsSeparator = original.length > 0 && !bufferEndsWith(original, eolBuf);
   const appended = Buffer.from(missingLines.join(eol) + eol, "utf8");
@@ -583,6 +626,7 @@ async function mergeMissingLines(
     filePath,
     needsSeparator ? Buffer.concat([original, eolBuf, appended]) : Buffer.concat([original, appended]),
   );
+  return true;
 }
 
 /** Splits `buf` on raw `\n` bytes, trimming a trailing `\r` and ASCII space/tab from each line — never decodes the bytes as text. */
@@ -851,5 +895,10 @@ export function registerInitCommand(program: Command): void {
     .action(async (target: string | undefined) => {
       const result = await initVault(target ?? ".");
       log.info(`initialized vault at ${path.resolve(result.root)} (${INIT_COMMIT_MESSAGE})`);
+      if (result.preexistingUntouched.length > 0) {
+        log.warn(
+          `left untouched, not committed (already existed at a scaffold path — review and \`git add\` yourself if you want them in version control): ${result.preexistingUntouched.join(", ")}`,
+        );
+      }
     });
 }

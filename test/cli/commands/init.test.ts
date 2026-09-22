@@ -1053,3 +1053,104 @@ describe("initVault — a rollback that cannot fully undo itself is reported tru
     }
   });
 });
+
+// Third remediation batch, S2 [RED first]: any scaffold path the user
+// already had (a custom .memory/config.yml, an index/.gitkeep with
+// real content, a .gitignore that already satisfied every required
+// line) was staged and committed unconditionally, just because it
+// happened to sit at a scaffold path — without the user ever having
+// reviewed or asked for that. Default: stage/commit ONLY what this run
+// actually created or modified; leave pre-existing untracked files
+// untouched and unstaged, and report them so the user can decide.
+describe("initVault — commits only what this run created or changed", () => {
+  it("a pre-existing config.yml is left untouched, unstaged, and reported — not silently committed", async () => {
+    const root = await freshGitRepo("s2-config");
+    try {
+      await mkdir(path.join(root, ".memory"), { recursive: true });
+      const customConfig = "# my own config, not the scaffold default\n";
+      await writeFile(path.join(root, ".memory", "config.yml"), customConfig, "utf8");
+
+      const result = await initVault(root);
+      expect(result.committed).toBe(true);
+      expect(result.preexistingUntouched).toContain(".memory/config.yml");
+
+      // untouched on disk
+      expect(await readFile(path.join(root, ".memory", "config.yml"), "utf8")).toBe(
+        customConfig,
+      );
+      // never staged/committed
+      const git = simpleGit(root);
+      const status = await git.status();
+      expect(status.not_added).toContain(".memory/config.yml");
+      const stat = await git.raw(["show", "--stat", "--format=", "HEAD"]);
+      expect(stat).not.toContain("config.yml");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a pre-existing index/.gitkeep with real content is left untouched, unstaged, and reported", async () => {
+    const root = await freshGitRepo("s2-gitkeep");
+    try {
+      await mkdir(path.join(root, "index"), { recursive: true });
+      await writeFile(path.join(root, "index", ".gitkeep"), "keep-me\n", "utf8");
+
+      const result = await initVault(root);
+      expect(result.committed).toBe(true);
+      expect(result.preexistingUntouched).toContain("index/.gitkeep");
+
+      expect(await readFile(path.join(root, "index", ".gitkeep"), "utf8")).toBe(
+        "keep-me\n",
+      );
+      const git = simpleGit(root);
+      const status = await git.status();
+      expect(status.not_added).toContain("index/.gitkeep");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a .gitignore that already satisfies every required line is left untouched, unstaged, and reported", async () => {
+    const root = await freshGitRepo("s2-gitignore-noop");
+    try {
+      const alreadyCompliant = ".memory/cache/\n.memory/local.json\nmy-own-entry/\n";
+      await writeFile(path.join(root, ".gitignore"), alreadyCompliant, "utf8");
+
+      const result = await initVault(root);
+      expect(result.committed).toBe(true);
+      expect(result.preexistingUntouched).toContain(".gitignore");
+
+      expect(await readFile(path.join(root, ".gitignore"), "utf8")).toBe(
+        alreadyCompliant,
+      );
+      const git = simpleGit(root);
+      const status = await git.status();
+      expect(status.not_added).toContain(".gitignore");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a pre-existing template that actually differs from the shipped default is left untouched, unstaged, and reported", async () => {
+    const root = await freshGitRepo("s2-template");
+    try {
+      await mkdir(path.join(root, ".memory", "templates"), { recursive: true });
+      const customTemplate = "# my own decision template\n";
+      await writeFile(
+        path.join(root, ".memory", "templates", "decision.md"),
+        customTemplate,
+        "utf8",
+      );
+
+      const result = await initVault(root);
+      expect(result.committed).toBe(true);
+      expect(result.preexistingUntouched).toContain(".memory/templates/decision.md");
+
+      expect(
+        await readFile(path.join(root, ".memory", "templates", "decision.md"), "utf8"),
+      ).toBe(customTemplate);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
