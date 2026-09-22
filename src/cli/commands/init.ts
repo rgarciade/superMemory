@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
-import { simpleGit } from "simple-git";
+import { simpleGit, type SimpleGit } from "simple-git";
 import { AppError } from "../../util/errors.js";
 import { createLogger } from "../../util/log.js";
-import { validateBoot } from "../../boot/validate-boot.js";
+import { assertVaultOutsideAppRepo, validateBoot } from "../../boot/validate-boot.js";
 
 /**
  * `supermemory init [path]` — one-time vault scaffold (RFC §7.1):
@@ -256,49 +256,142 @@ export async function initVault(vaultPath: string): Promise<InitResult> {
     );
   }
 
-  // scaffold .memory/
-  await mkdir(path.join(vaultPath, ".memory", "templates"), {
-    recursive: true,
-  });
+  // (4) must not be (or be inside) the supermemory source repo — every
+  // guard runs BEFORE any write, so a failure here leaves the target
+  // untouched instead of scaffolding into the app repo first and
+  // discovering the problem only at the post-write validateBoot call.
+  assertVaultOutsideAppRepo(vaultPath);
+
+  // scaffold .memory/ — config.yml and templates are never clobbered if
+  // they somehow already exist (write-if-absent); rules.md is always
+  // fresh here (guarded by check 3 above).
+  const memoryDir = path.join(vaultPath, ".memory");
+  const templatesDir = path.join(memoryDir, "templates");
+  await mkdir(templatesDir, { recursive: true });
+
+  const writtenPaths: string[] = [rulesPath];
   await writeFile(rulesPath, RULES_MD, "utf8");
-  await writeFile(path.join(vaultPath, ".memory", "config.yml"), CONFIG_YML, "utf8");
+
+  const configPath = path.join(memoryDir, "config.yml");
+  await writeIfAbsent(configPath, CONFIG_YML);
+  writtenPaths.push(configPath);
+
   for (const [name, content] of Object.entries(TEMPLATES)) {
-    await writeFile(
-      path.join(vaultPath, ".memory", "templates", name),
-      content,
-      "utf8",
-    );
+    const templatePath = path.join(templatesDir, name);
+    await writeIfAbsent(templatePath, content);
+    writtenPaths.push(templatePath);
   }
 
   // default folders (conflicts/ top-level: visible in Obsidian)
   for (const folder of DEFAULT_FOLDERS) {
-    await mkdir(path.join(vaultPath, folder), { recursive: true });
-    await writeFile(path.join(vaultPath, folder, ".gitkeep"), "", "utf8");
+    const folderPath = path.join(vaultPath, folder);
+    await mkdir(folderPath, { recursive: true });
+    const gitkeepPath = path.join(folderPath, ".gitkeep");
+    await writeIfAbsent(gitkeepPath, "");
+    writtenPaths.push(gitkeepPath);
   }
 
-  // vault-level git files
-  await writeFile(path.join(vaultPath, ".gitignore"), VAULT_GITIGNORE, "utf8");
-  await writeFile(path.join(vaultPath, ".gitattributes"), GITATTRIBUTES, "utf8");
+  // vault-level git files — merge missing lines into any pre-existing
+  // file instead of overwriting it (a vault root may already have its
+  // own .gitignore/.gitattributes for unrelated reasons).
+  const gitignorePath = path.join(vaultPath, ".gitignore");
+  await mergeMissingLines(gitignorePath, VAULT_GITIGNORE);
+  writtenPaths.push(gitignorePath);
 
-  // validate the fresh vault (five checks), then make the initial commit
-  await validateBoot(vaultPath);
+  const gitattributesPath = path.join(vaultPath, ".gitattributes");
+  await mergeMissingLines(gitattributesPath, GITATTRIBUTES);
+  writtenPaths.push(gitattributesPath);
 
-  const git = simpleGit(vaultPath);
+  // validate the fresh vault (five checks), then make the initial
+  // commit — staging ONLY the scaffold paths we just wrote, never
+  // `git add .` (which would also stage anything else sitting
+  // untracked in the vault, previously-ignored files included).
   try {
-    await git.add(".");
-    await git.commit(INIT_COMMIT_MESSAGE);
+    await validateBoot(vaultPath);
+    const git = simpleGit(vaultPath);
+    const relativePaths = writtenPaths.map((p) => path.relative(vaultPath, p));
+    await commitInitScaffold(git, relativePaths, INIT_COMMIT_MESSAGE);
   } catch (err) {
+    await rollbackScaffold(memoryDir);
+    if (err instanceof AppError) throw err;
+    const reason = err instanceof Error ? err.message : String(err);
     throw new AppError(
       "BOOT_VALIDATION_FAILED",
-      `the initial commit failed in "${vaultPath}".`,
+      `the initial commit failed in "${vaultPath}": ${reason}`,
       {
-        hint: "Configure your git identity first: git config user.name / user.email (the scaffold is on disk and will be committed next run).",
+        hint: "The scaffold was rolled back — fix the underlying issue (e.g. git identity: git config user.name / user.email, or a rejecting commit hook) and re-run `supermemory init`.",
         cause: err,
       },
     );
   }
 
   return { committed: true, root: vaultPath };
+}
+
+/** Writes `content` to `filePath` only if it does not already exist. */
+async function writeIfAbsent(filePath: string, content: string): Promise<void> {
+  if (existsSync(filePath)) return;
+  await writeFile(filePath, content, "utf8");
+}
+
+/**
+ * Writes `content` to `filePath` if it does not exist; otherwise
+ * appends only the lines from `content` that are not already present,
+ * so a pre-existing file (e.g. a vault root's own `.gitignore`) never
+ * loses its own entries.
+ */
+async function mergeMissingLines(filePath: string, content: string): Promise<void> {
+  if (!existsSync(filePath)) {
+    await writeFile(filePath, content, "utf8");
+    return;
+  }
+  const existing = await readFile(filePath, "utf8");
+  const existingLines = new Set(
+    existing
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0),
+  );
+  const missingLines = content
+    .split("\n")
+    .filter((line) => line.trim().length > 0 && !existingLines.has(line.trim()));
+  if (missingLines.length === 0) return;
+  const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+  await writeFile(
+    filePath,
+    `${existing}${separator}${missingLines.join("\n")}\n`,
+    "utf8",
+  );
+}
+
+/**
+ * Stages exactly `relativePaths` (never `git add .`) and commits them.
+ * Throws when git resolves the commit without an actual commit hash —
+ * simple-git resolves normally (no throw) when there is nothing to
+ * commit, which would otherwise be silently reported as success.
+ */
+export async function commitInitScaffold(
+  git: SimpleGit,
+  relativePaths: string[],
+  message: string,
+): Promise<void> {
+  await git.add(relativePaths);
+  const result = await git.commit(message);
+  if (!result.commit) {
+    throw new Error(
+      "git resolved the commit with no commit hash — nothing was actually committed",
+    );
+  }
+}
+
+/**
+ * Best-effort rollback of the `.memory/` scaffold after a failed
+ * post-write guard (validateBoot) or a failed initial commit, so a
+ * re-run resumes cleanly instead of being refused by check 3
+ * ("already has .memory/rules.md") over a half-committed attempt.
+ */
+async function rollbackScaffold(memoryDir: string): Promise<void> {
+  await rm(memoryDir, { recursive: true, force: true });
 }
 
 export function registerInitCommand(program: Command): void {
