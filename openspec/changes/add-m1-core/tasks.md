@@ -97,7 +97,7 @@ Index capability (`src/index` owns the in-memory store; all reads go through `qu
 Notes & save pipeline:
 
 - [x] 2.6 `src/notes/parse.ts` — gray-matter parse; deterministic id/title derivation (first `#` heading → `title` frontmatter → filename slug) shared by save, grammar, and index [tool-catalog]. — done (this commit; implemented ahead of 2.2–2.5 — `index/build.ts` depends on it): 10/10 (RED: module missing).
-- [ ] 2.7 `src/notes/linked-knowledge.ts` — spec hub Linked Knowledge section maintenance: appended on create, idempotent entries keyed by note id (repeated saves never duplicate) [tool-catalog].
+- [x] 2.7 `src/notes/linked-knowledge.ts` — spec hub Linked Knowledge section maintenance: appended on create, idempotent entries keyed by note id (repeated saves never duplicate) [tool-catalog]. — done (this commit): 5/5 (RED: module missing). Dedupe key is an HTML-comment marker (`<!-- linked:<id> -->`) per entry line, robust to title/path changes; entries insert at the end of the Linked Knowledge section (before the next heading, or EOF), creating the section if absent.
 - [ ] 2.8 `src/notes/save-pipeline.ts` — validate → render/merge → pull-before-write via injected `SyncPort` (null impl in P2) → write → `index.upsert` → `SyncPort.notifyWrite` → `{ path, id }` [tool-catalog].
 
 MCP capability:
