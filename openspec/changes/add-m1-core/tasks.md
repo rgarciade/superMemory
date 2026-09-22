@@ -1,7 +1,7 @@
 # Tasks — add-m1-core (M1: Core, dogfood-ready)
 
 Phase: tasks · Status: complete
-Inputs: `design.md` (§1 modules/conventions, §2 OD-1–OD-4, §3 boundaries, §4 sync, §5 MCP, §7 data contracts, §8 phase mapping), `specs/*/spec.md` (five capabilities), `proposal.md` (D1–D4, P1/P2/P3 seams), `explore.md` (testing strategy), `openspec/config.yaml` (tasks rules).
+Inputs: `design.md` (§1 modules/conventions, §2 OD-1–OD-5, §3 boundaries, §4 sync, §5 MCP, §7 data contracts, §8 phase mapping), `specs/*/spec.md` (five capabilities), `proposal.md` (D1–D4, P1/P2/P3 seams), `explore.md` (testing strategy), `openspec/config.yaml` (tasks rules).
 
 Conventions:
 - Every code task names its owning module path (design §1). Capabilities tagged `[rules-parsing]` `[boot-validation]` `[tool-catalog]` `[index]` `[sync-ladder]`.
@@ -12,7 +12,7 @@ Conventions:
 
 | Field | Value |
 |-------|-------|
-| Estimated changed lines | ~8,000–9,000 total (P0 ~2,700 · P1 ~1,850 · P2 ~1,800 · P3 ~2,200) |
+| Estimated changed lines | ~8,000–9,000 total (P0 ~2,700 · P1 ~1,850 · P2 ~1,650 · P3 ~2,200) |
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
 | Suggested split | PR 1 (P1) → PR 2 (P2) → PR 3 (P3) |
@@ -76,15 +76,23 @@ CLI (OD-1: commander + @inquirer/prompts):
 - [x] 1.18 `src/cli/commands/setup.ts` — `@inquirer/prompts` wizard: validated vault path, author identity, writes global config (`vaults.default`); is the remediation target of `No vault configured. Run: supermemory setup` [boot-validation]. — done: commit 44ca455; 3 tests via scripted PromptPort (config written, re-prompt until validateBoot passes, author defaults from vault git config); @inquirer/prompts bound at the console edge only.
 - [x] 1.19 P1 phase gate — full vitest suite green on Node 22 LTS; `npm run typecheck` + `npm run build` clean; all rules-parsing and boot-validation spec scenarios asserted; guard check that no test writes to the real HOME; commit PR-1 work units. — done: `npm test` 120/120 across 21 files; typecheck clean; build clean (`dist/cli/index.js` with shebang preserved); hermeticity guards in `test/p1/gate.test.ts` (tmp-only config writes, vaults under os.tmpdir(), env restoration); apply-progress.md written.
 
-## Phase 2 (P2) — SQLite index + MCP tool catalog (PR-2)
+PR-1 follow-up (lands after the phase gate; supersedes the SQLite parts of 1.2 and 1.14):
 
-Index capability (`src/index` owns all SQL):
+- [ ] 1.20 PR-1 SQLite removal (design OD-5; OD-3 withdrawn) — strip what PR-1 shipped for the SQLite index, in one work unit: drop `better-sqlite3` and `@types/better-sqlite3` from `package.json` + lockfile; delete `src/boot/sqlite-probe.ts` and `test/boot/sqlite-probe.test.ts`; remove `SQLITE_FTS5_MISSING` from `AppErrorCode`/`ERROR_CODES` in `src/util/errors.ts` and its assertion in `test/util/errors.test.ts`; delete `docs/TROUBLESHOOTING.md` (its only content is the `#fts5` section) and any link to it; drop the better-sqlite3 mention from the closeable-registration doc comment in `test/helpers/create-test-vault.ts` (the helper stays — locks and watchers still use it) [boot-validation][index].
+  - **Verified before planning**: `validateBoot()` never calls `probeSqlite()`. The probe shipped standalone and its only planned call site was `src/mcp/server.ts` (task 2.16, not started), so there is **no FTS5 step to remove from `src/boot/validate-boot.ts`** — only the dead module, the error code, and the doc.
+  - **ESM-interop smoke test (design OD-3)**: no replacement test is needed, and this must be stated in the commit body rather than assumed. `gray-matter` is still a CJS package default-imported by `src/boot/validate-boot.ts` (and by `src/notes/parse.ts` from 2.6), so the existing `validate-boot` tests already prove NodeNext ESM→CJS default-import interop on Node 22 LTS.
+  - **Out of this task's file scope, required before verify**: the `boot-validation` spec delta still carries `Requirement: FTS5 capability probe` with two scenarios, and the `tool-catalog` delta's `find` requirement still reads "free-text search over the FTS5 index". Both need a spec amendment — left unamended, they are a spec/implementation contradiction `sdd-verify` will (correctly) report.
+  - Gate: `npm test`, `npm run typecheck`, `npm run build` green with zero native dependencies; `rg -i 'sqlite|fts5'` over `src/`, `test/`, `docs/`, `package.json` returns nothing.
 
-- [ ] 2.1 `src/index/db.ts` + `src/index/schema.ts` — open/migrate under `<vault>/.memory/cache/`; DDL for notes, properties, FTS5, links; cache present on disk and invisible to git status [index].
-- [ ] 2.2 `src/index/upsert.ts` — incremental note upsert: saved/updated note immediately visible to `find` and backlink queries, no rebuild or restart [index].
-- [ ] 2.3 `src/index/queries.ts` — property filters (`type`/`status`/`spec_id`/`tags`/`owner`/date-range), FTS5 free text, combined filters; backlinks over wikilinks + `spec_id` graph; the only SQL-calling module [index].
-- [ ] 2.4 `src/index/rebuild.ts` — full rebuild from vault walk; deleting `.memory/cache/` loses nothing and reproduces identical query results (identity test) [index].
-- [ ] 2.5 `src/index/maps.ts` — deterministic regeneration of `index/` markdown maps (sorted, stable formatting) — the input for P3's `chore(index)` commits [index].
+## Phase 2 (P2) — In-memory index + MCP tool catalog (PR-2)
+
+Index capability (`src/index` owns the in-memory store; all reads go through `queries.ts` — design OD-5):
+
+- [ ] 2.1 `src/index/types.ts` + `src/index/store.ts` — `IndexedNote`/`QueryFilters`/result shapes; the in-memory structures: notes by id and by path, property lookups (`type`/`status`/`spec_id`/`tags`/`owner`/dates), body text for scanning, and the forward/backward link graph (wikilinks + `spec_id`). No I/O in this module — it is a data structure with explicit inputs [index].
+- [ ] 2.2 `src/index/build.ts` — `buildIndex(vaultPath, rules)`: walk the vault's Markdown, parse each note with `gray-matter` (via `notes/parse.ts` derivation for id/title), populate the store. Asserts: nothing is written to disk (no index artifact anywhere in the vault, `git status` clean after a build) and two builds over the same vault yield identical query results (restart identity) [index].
+- [ ] 2.3 `src/index/upsert.ts` — incremental update without a rebuild: `upsertNote(store, note)` for the save path (saved/updated note immediately visible to `find` and backlink queries, no restart), and `reparseFiles(store, vaultPath, paths[])` for changes that arrive on disk — the post-pull case, where git names the changed files. Asserts: unchanged notes are not re-read; deletions drop the note and its link edges [index].
+- [ ] 2.4 `src/index/queries.ts` — the only query surface: property filters (`type`/`status`/`spec_id`/`tags`/`owner`/date-range), free-text search over note bodies, combined filter+text (filters narrow first), and backlinks over the wikilink + `spec_id` graph. Deterministic result ordering (no relevance ranking — OD-5 states the tradeoff); no other module touches the store [index].
+- [ ] 2.5 `src/index/maps.ts` — deterministic regeneration of `index/` markdown maps (sorted, stable formatting) from the store — the committed, Obsidian-readable team surface and the input for P3's `chore(index)` commits [index].
 
 Notes & save pipeline:
 
@@ -96,14 +104,14 @@ MCP capability:
 
 - [ ] 2.9 `src/mcp/catalog.ts` — pure `buildCatalog(rules)`: exactly six tools, no `project` parameter anywhere; `save` schema per note type (discriminated by type, `.strict()`, required/types/enums from the model); descriptions embed the team's prose verbatim; rules are the only input (rebuild-on-reload ready) [tool-catalog]. Contract test: catalog snapshot + no-`project` assertion.
 - [ ] 2.10 `src/mcp/resources.ts` — `rules://current` resource (parsed rules + rendered templates); server instructions embed `templates/agent-instructions.md` when present [tool-catalog].
-- [ ] 2.11 `src/mcp/tools/find.ts` — property + FTS5 search; results `{ id, title, status, path }` (+ type), default limit 20; in-memory-transport contract test (property filter + free-text scenarios) [tool-catalog][index].
+- [ ] 2.11 `src/mcp/tools/find.ts` — property + free-text search via `index/queries.ts`; results `{ id, title, status, path }` (+ type), deterministic order, default limit 20; the tool description states that results are filtered and deterministically ordered, not relevance-ranked (OD-5); in-memory-transport contract test (property filter + free-text scenarios) [tool-catalog][index].
 - [ ] 2.12 `src/mcp/tools/read-with-context.ts` — content + frontmatter + backlinks (wikilinks and `spec_id`) + referenced specs' status/lifecycle + 5 most recent linked decisions/incidents; contract test on the spec-neighborhood scenario [tool-catalog].
 - [ ] 2.13 `src/mcp/tools/save.ts` — thin: zod schema check → `validateNote` (violation returned verbatim) → save-pipeline; contract tests: non-conforming save names the violated rule; valid save maintains Linked Knowledge without duplicates [tool-catalog].
 - [ ] 2.14 `src/mcp/tools/changes-since.ts` — ISO timestamp → git-log walk filtered to note-grammar commits, classified added/updated/status-changed/removed from deterministic headers (local header-parser here; unified into `src/sync/commit-message.ts` in 3.2) [tool-catalog].
 - [ ] 2.15 `src/mcp/tools/sync.ts` + `src/mcp/tools/status.ts` — coded against the engine interface; P2 ships documented stubs ("engine lands in P3; `supermemory sync`/plain git still work"); no schema change when P3 wires the real engine [tool-catalog].
-- [ ] 2.16 `src/mcp/server.ts` — boot per design §5.1: resolve vault (flag → `SUPERMEMORY_VAULT` → `vaults.default`; unresolvable ⇒ exact `No vault configured. Run: supermemory setup`) → `validateBoot` + probe → `loadRules` → `buildCatalog` → open/rebuild index → serve over stdio; stdout protocol-only, stderr logs; engine-state subscription point for `rules-refused`/`rules-reloaded` (P3) [tool-catalog][boot-validation].
+- [ ] 2.16 `src/mcp/server.ts` — boot per design §5.1: resolve vault (flag → `SUPERMEMORY_VAULT` → `vaults.default`; unresolvable ⇒ exact `No vault configured. Run: supermemory setup`) → `validateBoot` → `loadRules` → `buildCatalog` → `buildIndex` (in-memory, from the vault walk) → serve over stdio; stdout protocol-only, stderr logs; engine-state subscription point for `rules-refused`/`rules-reloaded` (P3) [tool-catalog][boot-validation].
 - [ ] 2.17 `src/cli/commands/serve.ts` — `--vault` flag; never interactive; delegates to server boot [tool-catalog].
-- [ ] 2.18 P2 phase gate — contract suite over `InMemoryTransport.createLinkedPair()`: exactly six tools listed; save-schema reflects declared required fields; rules-reload changes schemas without code change; cache-deletion rebuild identity; incremental upsert visibility; suite + typecheck + build green; commit PR-2 work units.
+- [ ] 2.18 P2 phase gate — contract suite over `InMemoryTransport.createLinkedPair()`: exactly six tools listed; save-schema reflects declared required fields; rules-reload changes schemas without code change; restart identity (a fresh build reproduces the same results) with no index artifact written anywhere in the vault; incremental upsert and changed-file re-parse visibility; suite + typecheck + build green; commit PR-2 work units.
 
 ## Phase 3 (P3) — Sync engine + commit grammar + conflict ladder + secrets lint (PR-3)
 
@@ -114,12 +122,12 @@ MCP capability:
 - [ ] 3.5 `src/sync/ladder.ts` — pure classification from `RulesModel` + config (generated `index/` / union via `conflict_policy: union` default `logs/` / curated default) + routing: all-generated → `checkout --theirs` + continue + deterministic regeneration; all-union → union concatenation + normalization; any curated ⇒ whole rebase takes the curated path [sync-ladder].
 - [ ] 3.6 `src/sync/conflict-note.ts` — write/read `conflicts/<date>-<note-id>.md` (frontmatter `status: open`, `note_path`, `snapshot_branch`, `detected_at`; body: both sides' summaries + `supermemory resolve` pointer); secrets lint before its `chore(conflict)` commit [sync-ladder].
 - [ ] 3.7 `src/sync/state.ts` — `EngineState` snapshot: last successful sync, pending-write count, open conflicts, stale notes (lifecycle staleness vs `Clock.now()`), format version, push paused, lock owner [sync-ladder].
-- [ ] 3.8 `src/sync/engine.ts` — `runCycle(trigger)` per design §4: acquire lock (held ⇒ ownership report) → pre-pull `format_version` guard on remote-tip rules (unsupported ⇒ skip pull, `rules-refused`) → per-write secrets lint + one commit per write event with derived message and human author (human working-tree changes via the same path) → `pull --rebase --autostash` → ladder on conflicts (curated ⇒ abort + snapshot branch `conflict/<date>-<note-id>` + conflict note + push paused) → union-log normalization (stable sort by timestamp, dedupe by entry id) → `chore(index): regenerate maps (<N> notes)` always separate → push (never force; capped exponential backoff on network failure via injected `Clock`, local writes intact, status keeps last success) → post-sync rules reload hook (refuse ⇒ halt commits/push; success ⇒ `rules-reloaded` with new model) [sync-ladder]. Tests: autostash survival, pull-before-write, skip-clean interval, backoff without loss.
+- [ ] 3.8 `src/sync/engine.ts` — `runCycle(trigger)` per design §4: acquire lock (held ⇒ ownership report) → pre-pull `format_version` guard on remote-tip rules (unsupported ⇒ skip pull, `rules-refused`) → per-write secrets lint + one commit per write event with derived message and human author (human working-tree changes via the same path) → `pull --rebase --autostash` (on success, hand the pulled diff's changed note paths to the injected `IndexPort.reparse(paths)` — incremental re-parse, never a full re-walk; OD-5) → ladder on conflicts (curated ⇒ abort + snapshot branch `conflict/<date>-<note-id>` + conflict note + push paused) → union-log normalization (stable sort by timestamp, dedupe by entry id) → `chore(index): regenerate maps (<N> notes)` always separate → push (never force; capped exponential backoff on network failure via injected `Clock`, local writes intact, status keeps last success) → post-sync rules reload hook (refuse ⇒ halt commits/push; success ⇒ `rules-reloaded` with new model) [sync-ladder]. Tests: autostash survival, pull-before-write, skip-clean interval, backoff without loss.
 - [ ] 3.9 `src/sync/scheduler.ts` — trailing-edge debounce (default 45 s) + interval fallback (default 15 min) built only on `TimerPort` + `Clock`; timers `.unref()`ed; triggers `runCycle` only (no git logic). Unit tests via a `ManualTimerPort` queue; production wiring proven under `vi.useFakeTimers()` + `advanceTimersByTimeAsync` [sync-ladder].
 - [ ] 3.10 `src/sync/resolve.ts` — guided flow: list open conflicts from conflict notes; materialize `<note>.local.md` + `<note>.remote.md` (extracted from the snapshot branch) side by side; prompt merge into the real path; finalize: commit `note(update): … (conflict resolved)`, push, flip conflict note to `status: resolved`; snapshot branch retained [sync-ladder].
 - [ ] 3.11 `src/cli/commands/sync.ts` — single `runCycle('manual')`, outcome report, no scheduler start [sync-ladder].
 - [ ] 3.12 `src/cli/commands/resolve.ts` — CLI entry for 3.10 [sync-ladder].
-- [ ] 3.13 Wiring — `src/cli/commands/serve.ts` + `src/mcp/server.ts` inject the real engine + scheduler; `sync`/`status` tools switch from stubs to the engine (no schema change); `src/notes/save-pipeline.ts` receives the real `SyncPort` (pull-before-write + notifyWrite) [sync-ladder][tool-catalog].
+- [ ] 3.13 Wiring — `src/cli/commands/serve.ts` + `src/mcp/server.ts` inject the real engine + scheduler; `sync`/`status` tools switch from stubs to the engine (no schema change); `src/notes/save-pipeline.ts` receives the real `SyncPort` (pull-before-write + notifyWrite); the engine receives the real `IndexPort` (`reparse` backed by `src/index/upsert.ts`) so pulled changes reach the in-memory index (OD-5) [sync-ladder][tool-catalog][index].
 - [ ] 3.14 P3 phase gate — headline never-delete test (divergent clones ⇒ rebase aborted with local state intact, remote version recoverable from the snapshot branch, conflict note visible in vault, `resolve` completes and `status` clears); secrets blocked on every trigger; lock single-owner/stale in a server-vs-CLI scenario; full hermetic M1 loop (`createTestVault` + bare remote → boot → save → debounce → cycle → find) green; suite + typecheck + build green; commit PR-3 work units.
 
 ---
@@ -130,7 +138,8 @@ MCP capability:
 |---|---|---|---|
 | Phase 0 | docs/RFC.md + openspec artifacts + .gitignore + README note (docs-only, no code) | ~2,500–3,000 | ~7× (docs-only; low review risk) |
 | Phase 1 (P1) | scaffold ~180 · util/config/rules/boot/cli ~850 · tests ~750 · TROUBLESHOOTING/config ~90 | ~1,850 | ~4.6× |
-| Phase 2 (P2) | index/notes/mcp/serve ~950 · tests ~850 | ~1,800 | ~4.5× |
+| Phase 1 follow-up (1.20) | net **removal**: probe + its test + error code + TROUBLESHOOTING + deps | ~-250 | well inside budget |
+| Phase 2 (P2) | index/notes/mcp/serve ~850 · tests ~800 | ~1,650 | ~4.1× |
 | Phase 3 (P3) | sync engine + grammar/ladder/lock/secrets/resolve ~1,000 · cli/wiring ~200 · tests ~1,000 | ~2,200 | ~5.5× |
 
 - Every implementation phase independently exceeds the 400-line review budget — this is structural (five capabilities, hermetic test infrastructure, and the sync engine cannot be thinned without dropping spec coverage).
