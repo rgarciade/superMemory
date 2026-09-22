@@ -46,6 +46,13 @@ describe("P1 phase gate — hermeticity guards", () => {
   });
 
   it("withTestEnv restores SUPERMEMORY_* around a body", async () => {
+    // Save/clear/restore SUPERMEMORY_VAULT itself: this test must pass
+    // whether or not the developer running it happens to have
+    // SUPERMEMORY_VAULT exported in their own shell — asserting
+    // `toBeUndefined()` unconditionally after restore is only correct
+    // when the pre-test value actually was undefined.
+    const original = process.env["SUPERMEMORY_VAULT"];
+    delete process.env["SUPERMEMORY_VAULT"];
     await mkdir(path.join(os.tmpdir(), "sm-gate-env"), { recursive: true });
     try {
       await withTestEnv({ vault: "/tmp/sm-gate-env" }, async () => {
@@ -57,6 +64,11 @@ describe("P1 phase gate — hermeticity guards", () => {
         recursive: true,
         force: true,
       });
+      if (original === undefined) {
+        delete process.env["SUPERMEMORY_VAULT"];
+      } else {
+        process.env["SUPERMEMORY_VAULT"] = original;
+      }
     }
   });
 });

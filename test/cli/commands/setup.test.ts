@@ -61,6 +61,7 @@ describe("runSetup", () => {
     await git.init();
     await git.addConfig("user.name", "Git Default");
     await git.addConfig("user.email", "git@example.com");
+    await git.addConfig("commit.gpgsign", "false");
     try {
       await simpleGit(vault).raw([
         "commit",
@@ -106,6 +107,9 @@ describe("runSetup", () => {
     const vault = await mkdtemp(path.join(os.tmpdir(), "sm-setup-rp-v-"));
     const git = simpleGit(vault);
     await git.init();
+    await git.addConfig("user.name", "Test User");
+    await git.addConfig("user.email", "test@example.com");
+    await git.addConfig("commit.gpgsign", "false");
     await git.raw(["commit", "--allow-empty", "-m", "init"]);
     const { mkdir, writeFile } = await import("node:fs/promises");
     await mkdir(path.join(vault, ".memory"), { recursive: true });
@@ -137,6 +141,7 @@ describe("runSetup", () => {
     await git.init();
     await git.addConfig("user.name", "Git Default");
     await git.addConfig("user.email", "git@example.com");
+    await git.addConfig("commit.gpgsign", "false");
     await git.raw(["commit", "--allow-empty", "-m", "init"]);
     const { mkdir, writeFile } = await import("node:fs/promises");
     await mkdir(path.join(vault, ".memory"), { recursive: true });
@@ -173,6 +178,7 @@ describe("runSetup", () => {
     await git.init();
     await git.addConfig("user.name", "Test User");
     await git.addConfig("user.email", "test@example.com");
+    await git.addConfig("commit.gpgsign", "false");
     await git.raw(["commit", "--allow-empty", "-m", "init"]);
     await mkdir(path.join(vault, ".memory"), { recursive: true });
     await writeFile(
@@ -211,6 +217,7 @@ describe("runSetup", () => {
     await git.init();
     await git.addConfig("user.name", "Test User");
     await git.addConfig("user.email", "test@example.com");
+    await git.addConfig("commit.gpgsign", "false");
     await git.raw(["commit", "--allow-empty", "-m", "init"]);
     await mkdir(path.join(vault, ".memory"), { recursive: true });
     await writeFile(
