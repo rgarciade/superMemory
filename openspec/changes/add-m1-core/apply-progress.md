@@ -200,9 +200,31 @@ Same deferred list as batches 1–2.
 
 - [x] **W4 regression — symlinked vault root wrongly refused.** A final scoped review (MERGEABLE, PR #1) found that the W4 symlink guard (`assertNoScaffoldSymlinks`) put `vaultPath` itself in its `lstat` candidates, so `init <link>` was refused while `init <link>/` and `cd <link> && init .` both succeeded (reproduced) — blocking a common setup (a vault symlinked into iCloud/Dropbox) via a check that was trivially bypassed anyway. A symlinked root is not the threat W4 guards against: writes through it land inside the real vault either way. Fixed in a 4th remediation commit: `initVault` now resolves the vault root once via `realpathSync.native` and uses that resolved root for every downstream guard, write, and git operation (including the returned `InitResult.root`); the symlink guard no longer checks the root itself, only scaffold paths and default folders below it (`.memory`, `.memory/templates`, `config.yml`, `logs/`, `.gitignore`, etc. — still refused). See the commit log for the exact SHA.
 
+## PR-1 follow-up — task 1.20 (SQLite removal, design OD-5; OD-3 withdrawn)
+
+Lands after the PR-1 phase gate (1.19), on the same branch. Strips everything PR-1 shipped for the abandoned derived-SQLite index now that OD-5 replaced it with an in-memory index.
+
+**Mode note (deviation from the standard RED→GREEN cycle, disclosed)**: this is a pure deletion task — no new behavior, nothing to describe with a failing test. Strict TDD's RED→GREEN→REFACTOR cycle does not apply to removing dead code; the equivalent discipline used instead is the "Safety Net" step from `strict-tdd.md` (§0): full suite run before and after, with the test-count delta reconciled exactly against what was deleted. No task in this batch wrote a new failing test first, and none needed to.
+
+| Task | Commit | Summary |
+|---|---|---|
+| 1.20 | `48baf9f` | Dropped `better-sqlite3`/`@types/better-sqlite3` from `package.json` + regenerated `package-lock.json` (`npm uninstall`); deleted `src/boot/sqlite-probe.ts` + `test/boot/sqlite-probe.test.ts`; removed `SQLITE_FTS5_MISSING` from `AppErrorCode`/`ERROR_CODES` (`src/util/errors.ts`) + its assertion (`test/util/errors.test.ts`); deleted `docs/TROUBLESHOOTING.md` (only content was `#fts5`, no links elsewhere); reworded the better-sqlite3 example in the closeable-registration doc comment (`test/helpers/create-test-vault.ts:63`) — helper behavior unchanged; reworded an unrelated "FTS5" example string in `test/rules/templates.test.ts` (arbitrary template-fixture content, not the removed feature) so the grep gate is fully clean. |
+
+**Safety net (before/after full suite)**:
+- Before: `npm test` **185/185** across **23 files**.
+- After: `npm test` **183/183** across **22 files**.
+- Delta reconciliation: exactly **-2 tests / -1 file** — the two tests in the deleted `test/boot/sqlite-probe.test.ts`. The `SQLITE_FTS5_MISSING` assertion removed from `test/util/errors.test.ts` was one `expect` line inside an existing test (not its own test), so it does not add to the delta. No other test count changed.
+- `npm run typecheck`: clean. `npm run build`: clean. `node_modules/better-sqlite3`: absent. `rg -i 'sqlite|fts5'` over `src/`, `test/`, `docs/`, `package.json`, `package-lock.json`: zero matches (`docs/RFC.md` intentionally out of scope — undecided by the user).
+
+**Verified, not assumed**: `validateBoot()` never called `probeSqlite()` — confirmed by re-grepping `src/boot/validate-boot.ts` before editing. The probe's only planned call site was `src/mcp/server.ts` (task 2.16, not started), so boot ordering is unchanged by this removal.
+
+**ESM-interop coverage (design OD-3) — no replacement test needed**: the probe's test doubled as the P1 CJS-default-import interop smoke on Node 22 LTS. That guarantee survives without a replacement because `src/boot/validate-boot.ts` still default-imports `gray-matter` (a CJS package), and every `validate-boot` test already runs on Node 22 — so NodeNext ESM→CJS default-import interop stays exercised on every suite run.
+
+**Spec status**: the `boot-validation`/`tool-catalog` spec deltas and `openspec/config.yaml` were already amended ahead of this task, on this same branch (`cfb8c6d`, `5653f89`) — no spec/implementation contradiction remains.
+
 ## Remaining tasks
 
-- Phase 2 (2.1–2.18): SQLite index + MCP tool catalog — PR-2, separate apply run on a branch stacked on this one.
+- Phase 2 (2.1–2.18): in-memory index (design OD-5) + MCP tool catalog — PR-2, separate apply run on a branch stacked on this one.
 - Phase 3 (3.1–3.14): sync engine + grammar + ladder + secrets — PR-3, separate apply run.
 
 ## Workload / PR boundary
