@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
 import { simpleGit, type SimpleGit } from "simple-git";
@@ -262,6 +262,16 @@ export async function initVault(vaultPath: string): Promise<InitResult> {
   // discovering the problem only at the post-write validateBoot call.
   assertVaultOutsideAppRepo(vaultPath);
 
+  // (5) none of the scaffold paths (or their parent directories) may
+  // be a symlink — `existsSync`/`writeFile`/`mkdir` all follow
+  // symlinks, so a dangling `.memory/config.yml` symlink would make
+  // init write the config OUTSIDE the vault (through the link) instead
+  // of refusing, and a symlinked `.gitignore` would make a successful
+  // run append to and commit whatever the link points at outside the
+  // vault. Checked with `lstat` (never follows symlinks), before any
+  // write.
+  await assertNoScaffoldSymlinks(vaultPath);
+
   // From here on, every write is tracked so a failure can roll back
   // EXACTLY what this run did — nothing pre-existing, ever (a vault's
   // `.memory/` may already hold unrelated content even without
@@ -385,6 +395,53 @@ function newScaffoldTracker(): ScaffoldTracker {
     stagedRelativePaths: [],
     preStageIndexEntries: new Map(),
   };
+}
+
+/**
+ * Refuses (before any write) if any scaffold path — or a default
+ * folder that will hold one — already exists as a symlink. `lstat`
+ * never follows symlinks (unlike `existsSync`/`stat`), so this is the
+ * only reliable way to detect one; a path that does not exist yet is
+ * not a problem (`lstat` throws ENOENT, treated as "nothing to guard").
+ */
+async function assertNoScaffoldSymlinks(vaultPath: string): Promise<void> {
+  const memoryDir = path.join(vaultPath, ".memory");
+  const templatesDir = path.join(memoryDir, "templates");
+  const candidates = new Set<string>([
+    vaultPath,
+    memoryDir,
+    templatesDir,
+    path.join(memoryDir, "rules.md"),
+    path.join(memoryDir, "config.yml"),
+    path.join(vaultPath, ".gitignore"),
+    path.join(vaultPath, ".gitattributes"),
+  ]);
+  for (const name of Object.keys(TEMPLATES)) {
+    candidates.add(path.join(templatesDir, name));
+  }
+  for (const folder of DEFAULT_FOLDERS) {
+    const folderPath = path.join(vaultPath, folder);
+    candidates.add(folderPath);
+    candidates.add(path.join(folderPath, ".gitkeep"));
+  }
+
+  for (const candidate of candidates) {
+    let stats;
+    try {
+      stats = await lstat(candidate);
+    } catch {
+      continue; // doesn't exist yet — nothing to guard against
+    }
+    if (stats.isSymbolicLink()) {
+      throw new AppError(
+        "BOOT_VALIDATION_FAILED",
+        `vault scaffold path "${candidate}" is a symlink.`,
+        {
+          hint: "Refusing to follow a symlink into or out of the vault — remove it (or replace it with a real file/directory) and re-run `supermemory init`.",
+        },
+      );
+    }
+  }
 }
 
 /**

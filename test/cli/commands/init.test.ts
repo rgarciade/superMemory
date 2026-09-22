@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
@@ -827,6 +836,79 @@ describe("initVault — merges and restores raw bytes, never re-encodes them", (
       expect(merged.includes(Buffer.from(".memory/cache/", "ascii"))).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// Third remediation batch, W4 [RED first]: existsSync/writeFile follow
+// symlinks. A dangling `.memory/config.yml` symlink makes init write
+// the config OUTSIDE the vault (through the link) instead of refusing;
+// a symlinked `.gitignore` makes a successful run append to and commit
+// whatever the link points at outside the vault (and commit the
+// symlink itself, mode 120000). Refuse via `lstat` (never follows
+// symlinks) BEFORE any write.
+describe("initVault — refuses scaffold paths that are symlinks", () => {
+  it("a dangling .memory/config.yml symlink is refused; nothing is created at the link target", async () => {
+    const root = await freshGitRepo("symlink-config");
+    const outsideDir = await mkdtemp(path.join(os.tmpdir(), "sm-symlink-outside-"));
+    try {
+      const outsideTarget = path.join(outsideDir, "config.yml");
+      await mkdir(path.join(root, ".memory"), { recursive: true });
+      await symlink(outsideTarget, path.join(root, ".memory", "config.yml"));
+
+      await expect(initVault(root)).rejects.toBeInstanceOf(AppError);
+
+      // the link itself is untouched, and nothing was ever created at
+      // the outside target it dangles toward.
+      const linkStat = await lstat(path.join(root, ".memory", "config.yml"));
+      expect(linkStat.isSymbolicLink()).toBe(true);
+      expect(existsSync(outsideTarget)).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("a symlinked .gitignore is refused; the outside target and the link are both left untouched", async () => {
+    const root = await freshGitRepo("symlink-gitignore");
+    const outsideDir = await mkdtemp(path.join(os.tmpdir(), "sm-symlink-outside2-"));
+    try {
+      const outsideTarget = path.join(outsideDir, "real-gitignore.txt");
+      const outsideContent = "outside-content\n";
+      await writeFile(outsideTarget, outsideContent, "utf8");
+      await symlink(outsideTarget, path.join(root, ".gitignore"));
+
+      await expect(initVault(root)).rejects.toBeInstanceOf(AppError);
+
+      const linkStat = await lstat(path.join(root, ".gitignore"));
+      expect(linkStat.isSymbolicLink()).toBe(true);
+      const outsideAfter = await readFile(outsideTarget, "utf8");
+      expect(outsideAfter).toBe(outsideContent);
+
+      // nothing was ever staged/committed (no symlink mode 120000
+      // entry sneaking into the init commit either).
+      const git = simpleGit(root);
+      const status = await git.status();
+      expect(status.staged).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("a symlinked default folder (e.g. specs/) is refused before anything is written into its target", async () => {
+    const root = await freshGitRepo("symlink-folder");
+    const outsideDir = await mkdtemp(path.join(os.tmpdir(), "sm-symlink-outside3-"));
+    try {
+      await symlink(outsideDir, path.join(root, "specs"));
+
+      await expect(initVault(root)).rejects.toBeInstanceOf(AppError);
+
+      const { readdir } = await import("node:fs/promises");
+      expect(await readdir(outsideDir)).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outsideDir, { recursive: true, force: true });
     }
   });
 });
