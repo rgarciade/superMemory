@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  applyHermeticGitConfigIsolation,
   applyHermeticGitEnv,
   buildHermeticGitConfigIsolation,
   buildHermeticGitEnv,
@@ -61,6 +62,79 @@ describe("buildHermeticGitConfigIsolation", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// Second remediation batch, N5 [RED first]: tests run from hooks (e.g.
+// husky/pre-commit invoking `npm test`) may inherit GIT_DIR/
+// GIT_INDEX_FILE/GIT_WORK_TREE pointing at the invoking repo, and git
+// itself supports injecting config purely via
+// GIT_CONFIG_COUNT/GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n/
+// GIT_CONFIG_PARAMETERS — none of that is covered by
+// GIT_CONFIG_GLOBAL/GIT_CONFIG_NOSYSTEM alone.
+describe("buildHermeticGitConfigIsolation — clears hook-inherited/dynamic git env noise", () => {
+  it("clears GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE", () => {
+    const env = buildHermeticGitConfigIsolation({
+      GIT_DIR: "/somewhere/.git",
+      GIT_INDEX_FILE: "/somewhere/.git/index",
+      GIT_WORK_TREE: "/somewhere",
+    });
+    expect(env["GIT_DIR"]).toBeUndefined();
+    expect(env["GIT_INDEX_FILE"]).toBeUndefined();
+    expect(env["GIT_WORK_TREE"]).toBeUndefined();
+  });
+
+  it("clears GIT_CONFIG_COUNT/GIT_CONFIG_KEY_*/GIT_CONFIG_VALUE_*/GIT_CONFIG_PARAMETERS", () => {
+    const env = buildHermeticGitConfigIsolation({
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "user.name",
+      GIT_CONFIG_VALUE_0: "Injected",
+      GIT_CONFIG_PARAMETERS: "'user.name=Injected'",
+    });
+    expect(env["GIT_CONFIG_COUNT"]).toBeUndefined();
+    expect(env["GIT_CONFIG_KEY_0"]).toBeUndefined();
+    expect(env["GIT_CONFIG_VALUE_0"]).toBeUndefined();
+    expect(env["GIT_CONFIG_PARAMETERS"]).toBeUndefined();
+  });
+
+  it("a poisoned GIT_DIR/GIT_WORK_TREE (as a git hook would inherit) no longer redirects git into the wrong repo", async () => {
+    const decoyRepo = await mkdtemp(path.join(os.tmpdir(), "sm-decoy-repo-"));
+    const realRepo = await mkdtemp(path.join(os.tmpdir(), "sm-real-repo-"));
+    try {
+      await execFileAsync("git", ["init"], {
+        cwd: decoyRepo,
+        env: buildHermeticGitConfigIsolation({ PATH: process.env["PATH"] }),
+      });
+      await execFileAsync("git", ["init"], {
+        cwd: realRepo,
+        env: buildHermeticGitConfigIsolation({ PATH: process.env["PATH"] }),
+      });
+
+      const poisonedBase = {
+        PATH: process.env["PATH"],
+        GIT_DIR: path.join(decoyRepo, ".git"),
+        GIT_WORK_TREE: decoyRepo,
+      };
+      const env = buildHermeticGitConfigIsolation(poisonedBase);
+      const { stdout } = await execFileAsync(
+        "git",
+        ["rev-parse", "--show-toplevel"],
+        { cwd: realRepo, env },
+      );
+      expect(stdout.trim()).toBe(await realpath(realRepo));
+    } finally {
+      await rm(decoyRepo, { recursive: true, force: true });
+      await rm(realRepo, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("applyHermeticGitConfigIsolation — mutates the target in place (Object.assign cannot delete keys)", () => {
+  it("actually deletes a pre-existing GIT_DIR from the target object, not just omits it from a returned copy", () => {
+    const target: NodeJS.ProcessEnv = { GIT_DIR: "/somewhere/.git" };
+    applyHermeticGitConfigIsolation(target);
+    expect(target["GIT_DIR"]).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(target, "GIT_DIR")).toBe(false);
   });
 });
 

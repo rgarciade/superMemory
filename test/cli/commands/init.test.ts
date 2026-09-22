@@ -242,6 +242,63 @@ describe("initVault — never clobbers existing vault-level git files", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  // N7 [RED first]: preserve the file's own line ending; a later
+  // negation (`!line`) must not count as the line being present.
+  it("preserves an existing CRLF .gitignore's line ending for the appended lines", async () => {
+    const root = await freshGitRepo("gitignore-crlf");
+    try {
+      const preexisting = "node_modules/\r\n.env\r\n";
+      await writeFile(path.join(root, ".gitignore"), preexisting, "utf8");
+      await initVault(root);
+      const gitignore = await readFile(path.join(root, ".gitignore"), "utf8");
+      expect(gitignore.startsWith(preexisting)).toBe(true);
+      expect(gitignore).toContain(".memory/cache/\r\n");
+      // no bare LF was introduced into the appended section
+      const appended = gitignore.slice(preexisting.length);
+      expect(appended.includes("\n") && !appended.includes("\r\n")).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("re-appends a line whose only prior occurrence was negated (gitignore last-match-wins)", async () => {
+    const root = await freshGitRepo("gitignore-negated");
+    try {
+      // the file already un-ignores .memory/cache/ via a later `!` line
+      // — the positive entry is NOT in effect, so init must add it
+      // again (appending, not skipping) to actually ignore it.
+      const preexisting = ".memory/cache/\n!.memory/cache/\n";
+      await writeFile(path.join(root, ".gitignore"), preexisting, "utf8");
+      await initVault(root);
+      const gitignore = await readFile(path.join(root, ".gitignore"), "utf8");
+      const lines = gitignore.split("\n").map((l) => l.trim()).filter(Boolean);
+      const lastMemoryCacheLine = [...lines]
+        .reverse()
+        .find((l) => l === ".memory/cache/" || l === "!.memory/cache/");
+      expect(lastMemoryCacheLine).toBe(".memory/cache/");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT re-append a line whose last occurrence is already positive (idempotent merge)", async () => {
+    const root = await freshGitRepo("gitignore-idempotent");
+    try {
+      // negated, then re-affirmed — the positive form IS in effect, so
+      // nothing should be appended for this line.
+      const preexisting = "!.memory/cache/\n.memory/cache/\n";
+      await writeFile(path.join(root, ".gitignore"), preexisting, "utf8");
+      await initVault(root);
+      const gitignore = await readFile(path.join(root, ".gitignore"), "utf8");
+      const occurrences = gitignore
+        .split("\n")
+        .filter((l) => l.trim() === ".memory/cache/").length;
+      expect(occurrences).toBe(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("initVault — stages only the scaffold paths", () => {

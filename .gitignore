@@ -8,3 +8,9 @@ dist/
 .env
 *.tsbuildinfo
 .vitest/
+
+# Test fixtures deliberately created inside the repo root itself (the
+# "vault inside the app repo" guard tests must prove the guard rejects
+# a path genuinely inside this repo; each cleans up via `finally`, but
+# an interrupted run should never leave one untracked).
+tmp-sm-*/
