@@ -74,6 +74,12 @@ Scope of this apply run: **Phase 0 (0.1) + Phase 1 (1.1–1.19) only** — the P
 - Modified (tests): `test/cli/commands/init.test.ts`, `test/boot/validate-boot.test.ts`, `test/setup/git-env.test.ts`
 - Modified (docs): this file (second remediation batch section)
 
+### Remediation batch (3rd) — additional files changed
+
+- Modified: `src/cli/commands/init.ts` only (write-before-track + `wx`, index-entry snapshot/restore, raw-byte merge, symlink guard, `-f` staging, rollback-issue reporting, preexisting-path tracking + `InitResult.preexistingUntouched` + CLI warning)
+- Modified (tests): `test/cli/commands/init.test.ts` only
+- Modified (docs): this file (third remediation batch section)
+
 ## Deviations from design
 
 1. **vitest 5 `include` instead of `testMatch`** (1.1/1.3) — vitest 5 removed `testMatch`; same semantics.
@@ -153,6 +159,42 @@ Grouping notes: N1/#4/N4 share one commit — they are the exact same tracked-wr
 ### Out of scope (unchanged from batch 1, plus nothing new added)
 
 Same list as above — no new deferred items from this batch.
+
+## Third remediation batch (post-re-re-review fixes, PR-1 slice)
+
+A third fresh-context review returned MERGEABLE WITH FIXES (no criticals — the second batch's N1 data-loss fix held) on 7 remaining init.ts edge cases (W1–W5, S1, S2). All 7 are fixed on the same branch, one RED→GREEN work-unit commit per fix, strict TDD throughout. **New process rule for this batch**: every commit must be green in isolation — `npm test` was run to completion (green) immediately before every commit below, with only that fix's test+implementation staged (not a full-file `git add`), so no commit in this batch bundles a later fix's not-yet-implemented RED tests the way `c514e2e` did in batch 2. `npm test` (182/182), `npm run typecheck`, and `npm run build` all pass at the end.
+
+| # | Finding | Commit | Fix |
+|---|---|---|---|
+| W1 | A path was registered in the rollback tracker only AFTER its write succeeded. Under `ulimit -f 2`, writing rules.md (~2.2 KB) failed with EFBIG after ~2 KB, leaving a truncated file the tracker never learned about — rollback couldn't remove it, every re-run refused ("already has rules.md") | `ac4ec94` | Track the path BEFORE writing (rules.md, writeIfAbsent's targets, ensureDir's directories); scaffold file writes use `{flag: "wx"}` (exclusive create), closing the exists-check/write race too |
+| W2 | Rollback unstaged via `git reset -- <paths>`, which resets the INDEX to HEAD — not to what the user had staged. A `.gitignore` staged with content differing from both HEAD and the merge init produced was silently lost on rollback (reproduced both with and without a HEAD) | `4a08af5` | Snapshot each scaffold path's index entry (`git ls-files -s`) before staging; restore exactly via `git update-index --cacheinfo` (has an entry) or `--force-remove` (had none) — both work with or without a HEAD |
+| W3 | `.gitignore`/`.gitattributes` were read/written as UTF-8 text. A raw non-UTF8 byte (Latin-1 0xE9) was silently turned into the UTF-8 replacement character (EF BF BD) on both the success path (what gets committed) and the rollback path (what gets "restored") | `0f0411b` | Read/write these files as raw `Buffer`s throughout; merge logic operates on raw newline-delimited byte slices, never decodes the file as text |
+| W4 | `existsSync`/`writeFile`/`mkdir` all follow symlinks. A dangling `.memory/config.yml` symlink made init write the config OUTSIDE the vault; a symlinked `.gitignore` made a successful run append to and commit whatever the link pointed at outside the vault | `7923e1e` | `assertNoScaffoldSymlinks`: `lstat` (never follows symlinks) on every scaffold path, default folder, and the vault root itself, before any write; refuses with an AppError if any is a symlink |
+| W5 | `git add` without `-f` fails (exit 1, not a silent skip) when `core.excludesFile` matches a scaffold path — e.g. an excludes file listing `logs` made init always fail | `cb53e54` | `git add -f -- <scaffold paths>` — still only ever the explicit scaffold paths, never a directory glob |
+| S1 | Rollback errors were swallowed (bare `catch {}`), yet the final hint unconditionally claimed "Everything this run created was removed". Reproduced: staged `.gitignore` + read-only `.git` → both the original `git add` AND the rollback's own index-restore attempt failed the same way, but the old code reported a clean rollback | `1ef242d` | `rollbackScaffold`/`restoreIndexEntries` collect every step they could not undo (path + reason) and return it; the caller builds a truthful hint — full "everything undone" only when the issue list is empty, otherwise the specific paths/reasons are listed alongside the original cause. `ENOTEMPTY`/`ENOENT` on a directory removal is correctly NOT treated as a failure (expected outcome) |
+| S2 | Every scaffold path was staged and committed unconditionally just for existing at that path when init finished — a custom `.memory/config.yml`, an `index/.gitkeep` with real content, or an already-compliant `.gitignore` got committed without the user ever reviewing them | `4fcecfe` | `writeIfAbsent`/`mergeMissingLines` report whether they actually wrote anything; only truly created/changed paths are staged/committed. Everything else is left untouched and returned as `InitResult.preexistingUntouched` (relative paths); the CLI warns about them by name, pointing at `git add` |
+
+No fixes in this batch shared a commit — each addressed a genuinely distinct code path (even where several touch `init.ts`, none are the same mechanism).
+
+### TDD Cycle Evidence — third remediation batch
+
+| Finding | RED (failing first) | GREEN | Notes |
+|---|---|---|---|
+| W1 | Manually reproduced first via a standalone harness (`ulimit -f 2` + tsx, no build needed): `EFBIG` after 2048 bytes, truncated rules.md left on disk. Same repro then written as a real vitest test (spawns `initVault` via tsx under the rlimit) | 26/26 (init.test.ts) | Real OS-level repro, not a mock |
+| W2 | Manual repro first (`git ls-files -s` / `update-index --cacheinfo` round-trip in raw bash); then two vitest tests (with and without a HEAD) both failed against the old `git reset` rollback | 29/29 | Confirmed `git reset -- path` on an unborn branch fully drops the entry (`fatal: path exists on disk, but not in the index`) |
+| W3 | Built a Latin-1 byte (`0xE9`) via `Buffer`, wrote it as `.gitignore`; both the rollback-restore test and the successful-merge test failed (`Buffer.equals` false — bytes had been re-encoded) | 31/31 | — |
+| W4 | Two of three symlink scenarios failed (init succeeded instead of refusing); the third (a symlinked default folder) already incidentally passed even before the fix, because git itself refuses to `add` a path traversing a symlinked directory — kept as a regression guard, noted as not literally RED | 34/34 | Confirmed via `lstat` that the link itself, and the outside target, were both left untouched after the fix |
+| W5 | Manual repro first (raw bash: `git add` on a path matched by `core.excludesFile` exits 1); vitest test using a LOCAL (never global) excludesFile on a disposable repo reproduced the same `initVault` failure | 36/36 | Also updated `commitInitScaffold`'s existing fake-git unit tests (added a `raw` stub) and added a dedicated spy test asserting `["add","-f","--",...]` |
+| S1 | Direct unit tests of exported `rollbackScaffold` (hand-built tracker + a real EACCES via `chmod 0500` on a parent dir) failed (`newScaffoldTracker`/`rollbackScaffold` not exported yet); end-to-end test (staged `.gitignore` + read-only `.git`) failed because the hint falsely claimed full success | 39/39 | Real EACCES both at the unit level and end-to-end (`.git` chmod'd read-only) |
+| S2 | Four tests (custom config.yml, gitkeep with content, already-compliant gitignore, custom template) all failed: `result.preexistingUntouched` was `undefined` (field didn't exist) | 43/43 | — |
+
+### Isolation verification note
+
+Attempted `git archive <sha> \| tar -x -C <mktemp>` + a symlinked `node_modules` for `ac4ec94`: 164/165 tests passed; the one failure (`test/repo-hygiene.test.ts`) is a false failure of the *verification method itself* — `git archive` extracts the tree without `.git`, and that test calls `git check-ignore`, which requires an actual git repository to exist at all. Every other test (including the whole of `init.test.ts`, this batch's actual subject) passed cleanly in the archived checkout. Given this tooling limitation, the remaining 6 commits were verified with the sanctioned alternative instead: `npm test` run to completion (green) from the real repo immediately before each commit, with only that fix's files staged.
+
+### Out of scope (unchanged — no new deferred items from this batch)
+
+Same deferred list as batches 1–2.
 
 ## Remaining tasks
 
