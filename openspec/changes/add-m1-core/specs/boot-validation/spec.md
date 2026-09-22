@@ -1,6 +1,6 @@
 # Delta for Boot Validation
 
-M1 scope: single-vault mode. Vault path validation shared by `setup` and `serve` (RFC §3 boot-time validation): five checks, fail-fast with actionable messages, plus the SQLite FTS5 capability probe.
+M1 scope: single-vault mode. Vault path validation shared by `setup` and `serve` (RFC §3 boot-time validation): five checks, fail-fast with actionable messages.
 
 ## ADDED Requirements
 
@@ -41,19 +41,3 @@ Boot validation SHALL be fail-fast: the first failed check aborts startup with a
 - GIVEN no vault path resolvable from the launch flag, `SUPERMEMORY_VAULT`, or global config
 - WHEN the server or CLI starts
 - THEN it fails fast with `No vault configured. Run: supermemory setup` and serves nothing
-
-### Requirement: FTS5 capability probe
-
-At boot, the system SHALL probe the SQLite build for FTS5 full-text search support. If FTS5 is unavailable, boot SHALL fail fast with an actionable error that explains the missing capability and points to the documented remediation (rebuilding the native SQLite dependency). The system MUST NOT serve `find` or any FTS-dependent behavior against an index it cannot build correctly.
-
-#### Scenario: SQLite build without FTS5 aborts boot with remediation
-
-- GIVEN a SQLite build that lacks FTS5 support
-- WHEN boot runs the capability probe
-- THEN startup fails with an actionable message naming FTS5 as missing and describing the rebuild fallback
-
-#### Scenario: FTS5-capable build boots normally
-
-- GIVEN a SQLite build with FTS5 support
-- WHEN boot runs the capability probe
-- THEN the probe passes and boot continues to vault validation and serving

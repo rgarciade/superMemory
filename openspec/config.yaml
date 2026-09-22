@@ -6,10 +6,10 @@ context: |
   validated, searchable access to a git-synced Markdown knowledge vault
   (source: docs/RFC.md v1.2).
   Stack: Node.js LTS, TypeScript, @modelcontextprotocol/sdk, zod,
-  simple-git, gray-matter, better-sqlite3.
+  simple-git, gray-matter.
   Architecture: stateless MCP server; rules-as-markdown ontology
   (.memory/rules.md); one sync engine shared by CLI and server;
-  SQLite derived index (FTS5 + properties + link graph).
+  in-memory index (properties, full text, link graph).
   Key invariants: vault is the single source of truth; the app stores
   no memories; never silently delete.
   Testing: no test runner yet — the first implementation change

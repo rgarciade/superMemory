@@ -32,7 +32,7 @@ The `save` input schema for each declared note type SHALL be generated from that
 
 ### Requirement: find — structured and full-text search
 
-The `find` tool SHALL search the vault over the property index with filters by note type, `status`, `spec_id`, `tags`, `owner`, and date ranges, plus free-text search over the FTS5 index. Results SHALL include each note's id, title, status, and path.
+The `find` tool SHALL search the vault over the property index with filters by note type, `status`, `spec_id`, `tags`, `owner`, and date ranges, plus free-text search over the full-text index. Results SHALL include each note's id, title, status, and path.
 
 #### Scenario: Property filter returns only matching notes
 
@@ -42,7 +42,7 @@ The `find` tool SHALL search the vault over the property index with filters by n
 
 #### Scenario: Free-text query hits note content
 
-- GIVEN a vault containing a note whose body mentions "FTS5"
+- GIVEN a vault containing a note whose body mentions "full-text search"
 - WHEN `find` is called with a free-text query for that term
 - THEN the note is among the results
 
