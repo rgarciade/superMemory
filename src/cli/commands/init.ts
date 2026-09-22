@@ -317,6 +317,7 @@ export async function initVault(vaultPath: string): Promise<InitResult> {
       ...new Set(writtenPaths.map((p) => path.relative(vaultPath, p))),
     ];
     tracker.stagedRelativePaths = relativePaths;
+    tracker.preStageIndexEntries = await snapshotIndexEntries(git, relativePaths);
     await commitInitScaffold(git, relativePaths, INIT_COMMIT_MESSAGE);
   } catch (err) {
     await rollbackScaffold(vaultPath, tracker);
@@ -357,10 +358,32 @@ interface ScaffoldTracker {
   mergedFiles: Array<{ path: string; original: string | undefined }>;
   /** Relative paths (from the vault root) this run staged with `git add`. */
   stagedRelativePaths: string[];
+  /**
+   * Each staged path's index entry from BEFORE `git add` ran —
+   * `undefined` means the path had no index entry (untracked/unstaged)
+   * beforehand. Captured via `git ls-files -s`, so rollback can restore
+   * the index EXACTLY, not merely `git reset -- <paths>` to HEAD: if
+   * the user had already staged a version of e.g. `.gitignore` that
+   * differs from BOTH HEAD and whatever init merged, resetting to HEAD
+   * (or, on an unborn branch with no HEAD to reset to, dropping the
+   * entry entirely) silently loses it.
+   */
+  preStageIndexEntries: Map<string, IndexEntry>;
+}
+
+interface IndexEntry {
+  mode: string;
+  sha: string;
 }
 
 function newScaffoldTracker(): ScaffoldTracker {
-  return { createdDirs: [], createdFiles: [], mergedFiles: [], stagedRelativePaths: [] };
+  return {
+    createdDirs: [],
+    createdFiles: [],
+    mergedFiles: [],
+    stagedRelativePaths: [],
+    preStageIndexEntries: new Map(),
+  };
 }
 
 /**
@@ -507,6 +530,61 @@ function isEffectivelyPresent(existingLines: string[], target: string): boolean 
 }
 
 /**
+ * Snapshots the current index entry (mode + blob sha) for each of
+ * `relativePaths`, BEFORE staging — a path absent from the result had
+ * no index entry at all. `git ls-files -s` reads purely from the
+ * index, so this works identically with or without a HEAD commit.
+ */
+async function snapshotIndexEntries(
+  git: SimpleGit,
+  relativePaths: string[],
+): Promise<Map<string, IndexEntry>> {
+  const snapshot = new Map<string, IndexEntry>();
+  if (relativePaths.length === 0) return snapshot;
+  const raw = await git.raw(["ls-files", "-s", "--", ...relativePaths]);
+  for (const line of raw.split("\n")) {
+    if (line.trim() === "") continue;
+    const tabIndex = line.indexOf("\t");
+    if (tabIndex === -1) continue;
+    const relPath = line.slice(tabIndex + 1);
+    const [mode, sha] = line.slice(0, tabIndex).trim().split(/\s+/);
+    if (mode && sha) snapshot.set(relPath, { mode, sha });
+  }
+  return snapshot;
+}
+
+/**
+ * Restores the index to exactly its pre-stage state for
+ * `relativePaths`: a path that had an entry gets that exact entry back
+ * (`update-index --cacheinfo`, no stdin needed, and untouched by
+ * whether a HEAD exists); a path that had none is force-removed from
+ * the index (`update-index --force-remove`, a safe no-op if it's
+ * already absent). Never touches the working tree.
+ */
+async function restoreIndexEntries(
+  git: SimpleGit,
+  relativePaths: string[],
+  snapshot: Map<string, IndexEntry>,
+): Promise<void> {
+  for (const relPath of relativePaths) {
+    const entry = snapshot.get(relPath);
+    try {
+      if (entry) {
+        await git.raw([
+          "update-index",
+          "--cacheinfo",
+          `${entry.mode},${entry.sha},${relPath}`,
+        ]);
+      } else {
+        await git.raw(["update-index", "--force-remove", "--", relPath]);
+      }
+    } catch {
+      // best-effort
+    }
+  }
+}
+
+/**
  * Stages exactly `relativePaths` (never `git add .`) and commits ONLY
  * those paths (never a bare `git commit` with no pathspec) — if the
  * user already had unrelated changes staged before running init (e.g.
@@ -546,13 +624,19 @@ async function rollbackScaffold(
   vaultPath: string,
   tracker: ScaffoldTracker,
 ): Promise<void> {
-  // 1. Unstage exactly what this run staged. `git reset -q -- <paths>`
-  //    (no ref) never references HEAD, so it is safe on an unborn
-  //    branch (a repo with no commits yet) too.
+  // 1. Restore the index to exactly its pre-stage state for whatever
+  //    this run staged — NOT `git reset -- <paths>` (resets to HEAD,
+  //    which silently drops anything the user had staged that differs
+  //    from HEAD; on an unborn branch with no HEAD to reset to, it
+  //    drops the staged entry entirely instead of restoring it).
   if (tracker.stagedRelativePaths.length > 0) {
     try {
       const git = simpleGit(vaultPath);
-      await git.raw(["reset", "-q", "--", ...tracker.stagedRelativePaths]);
+      await restoreIndexEntries(
+        git,
+        tracker.stagedRelativePaths,
+        tracker.preStageIndexEntries,
+      );
     } catch {
       // best-effort — proceed with the filesystem rollback regardless
     }

@@ -687,3 +687,85 @@ describe("initVault — a write failure mid-file does not leave an untracked tru
     }
   }, 20000);
 });
+
+// Third remediation batch, W2 [RED first]: rollback unstaged scaffold
+// paths via `git reset -- <paths>`, which resets the INDEX to HEAD —
+// not to whatever the user had staged before running init. If
+// `.gitignore` was already staged with content that differs from both
+// HEAD and the working tree, that staged version is silently lost.
+// Reproduced both with and without a HEAD (an unborn branch has no ref
+// to reset to at all — `git reset -- path` there fully drops the
+// user's staged entry instead of restoring it).
+describe("initVault — rollback restores the exact index entry the user had staged", () => {
+  it("with a HEAD: a staged .gitignore differing from both HEAD and the merged content is restored exactly", async () => {
+    const root = await freshGitRepo("index-restore-head");
+    try {
+      const git = simpleGit(root);
+      await writeFile(path.join(root, ".gitignore"), "content-v1\n", "utf8");
+      await git.add([".gitignore"]);
+      await git.raw(["commit", "-m", "initial"]);
+
+      // the user stages a DIFFERENT version than HEAD, then runs init
+      await writeFile(path.join(root, ".gitignore"), "user-staged-version\n", "utf8");
+      await git.add([".gitignore"]);
+      const beforeInit = (await git.raw(["show", ":.gitignore"])).trim();
+      expect(beforeInit).toBe("user-staged-version");
+
+      await mkdir(path.join(root, ".git", "hooks"), { recursive: true });
+      const hookPath = path.join(root, ".git", "hooks", "pre-commit");
+      await writeFile(hookPath, "#!/bin/sh\nexit 1\n", "utf8");
+      await chmod(hookPath, 0o755);
+
+      await expect(initVault(root)).rejects.toBeInstanceOf(AppError);
+
+      const afterRollback = (await git.raw(["show", ":.gitignore"])).trim();
+      // must be the user's staged content — NOT HEAD's "content-v1"
+      // (what a bare `git reset -- path` would restore) and NOT the
+      // merged content init staged before failing.
+      expect(afterRollback).toBe("user-staged-version");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("without a HEAD (unborn branch): a staged .gitignore survives a rolled-back init", async () => {
+    const root = await freshGitRepo("index-restore-no-head");
+    try {
+      const git = simpleGit(root);
+      await writeFile(path.join(root, ".gitignore"), "user-staged-no-head\n", "utf8");
+      await git.add([".gitignore"]);
+      const beforeInit = (await git.raw(["show", ":.gitignore"])).trim();
+      expect(beforeInit).toBe("user-staged-no-head");
+
+      await mkdir(path.join(root, ".git", "hooks"), { recursive: true });
+      const hookPath = path.join(root, ".git", "hooks", "pre-commit");
+      await writeFile(hookPath, "#!/bin/sh\nexit 1\n", "utf8");
+      await chmod(hookPath, 0o755);
+
+      await expect(initVault(root)).rejects.toBeInstanceOf(AppError);
+
+      const afterRollback = (await git.raw(["show", ":.gitignore"])).trim();
+      expect(afterRollback).toBe("user-staged-no-head");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a scaffold path the user had NOT staged before init is unstaged again after rollback (not left committed to a stale blob)", async () => {
+    const root = await freshGitRepo("index-restore-new-path");
+    try {
+      await mkdir(path.join(root, ".git", "hooks"), { recursive: true });
+      const hookPath = path.join(root, ".git", "hooks", "pre-commit");
+      await writeFile(hookPath, "#!/bin/sh\nexit 1\n", "utf8");
+      await chmod(hookPath, 0o755);
+
+      await expect(initVault(root)).rejects.toBeInstanceOf(AppError);
+
+      const git = simpleGit(root);
+      const status = await git.status();
+      expect(status.staged).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
