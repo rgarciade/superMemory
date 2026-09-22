@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-// Task 1.1: trivial test proving the vitest runner is wired (design §1.7).
+// Trivial runner proof (task 1.1): vitest is wired with no globals —
+// { describe, it, expect } are imported explicitly per design §1.7.
 describe("package scaffold", () => {
   it("package.json declares the supermemory ESM package shape", async () => {
     const pkgPath = fileURLToPath(new URL("../package.json", import.meta.url));

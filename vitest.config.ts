@@ -4,7 +4,8 @@ export default defineConfig({
   test: {
     // Node environment (default). No globals: tests import
     // { describe, it, expect, vi } explicitly (design §1.7).
-    testMatch: ["test/**/*.test.ts"],
+    // (vitest 5 renamed testMatch -> include; same semantics.)
+    include: ["test/**/*.test.ts"],
     globals: false,
   },
 });
