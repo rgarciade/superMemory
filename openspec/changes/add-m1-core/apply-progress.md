@@ -1,10 +1,10 @@
 # Apply Progress — add-m1-core
 
 Phase: apply · Chained delivery (stacked-to-main): PR-1 complete (open as GitHub PR #1) on
-`add-m1-core/pr1-scaffold-rules-boot`; this file also covers the PR-2 slice below,
-tasks 2.1–2.8 (in-memory index + notes layer) on `add-m1-core/pr2-index-notes`,
-stacked on PR-1. Tasks 2.9–2.18 (MCP catalog/tools/server, P2 gate) and Phase 3
-(3.1–3.14, PR-3) remain, in separate apply runs.
+`add-m1-core/pr1-scaffold-rules-boot`; this file also covers PR-2 in full — all of
+Phase 2, tasks 2.1–2.18 (in-memory index + notes layer + MCP catalog/tools/server/
+serve + P2 phase gate) — on `add-m1-core/pr2-index-notes`, stacked on PR-1. Only
+Phase 3 (3.1–3.14, PR-3) remains, in a separate apply run.
 Scope of the original apply run this file started from: **Phase 0 (0.1) + Phase 1 (1.1–1.19) only** — the PR-1 work unit of the chained delivery.
 
 **Note on commit SHAs below**: git history for this branch was rewritten (author email correction) after the table below was first written. All SHAs in this file are the post-rewrite (current) SHAs.
@@ -226,12 +226,14 @@ Lands after the PR-1 phase gate (1.19), on the same branch. Strips everything PR
 
 **Spec status**: the `boot-validation`/`tool-catalog` spec deltas and `openspec/config.yaml` were already amended ahead of this task, on this same branch (`cfb8c6d`, `5653f89`) — no spec/implementation contradiction remains.
 
-## PR-2 slice (tasks 2.1–2.8) — in-memory index + notes layer
+## PR-2 (Phase 2, tasks 2.1–2.18) — in-memory index + notes layer + MCP layer
 
 Branch: `add-m1-core/pr2-index-notes` (stacked-to-main), stacked on `add-m1-core/pr1-scaffold-rules-boot`.
-Scope of this apply run: **tasks 2.1–2.8 only** — the in-memory index (`src/index/`) and the
-notes/save-pipeline layer (`src/notes/`). Tasks 2.9–2.18 (MCP catalog, six tools, `server.ts`,
-`serve` CLI command, P2 phase gate) are a separate, later PR-2 apply run.
+Landed across two apply runs: tasks 2.1–2.8 (index + notes layer) first, tasks 2.9–2.18
+(MCP catalog/tools/server/serve + P2 phase gate) second. Both are recorded below; Phase 2
+is now complete.
+
+### First apply run (tasks 2.1–2.8) — in-memory index + notes layer
 
 Implementation order deliberately followed the module dependency graph (design §1.3: `index →
 notes(parse), rules, util`), not task numbering: `notes/parse.ts` (2.6) landed before
@@ -248,7 +250,7 @@ notes(parse), rules, util`), not task numbering: `notes/parse.ts` (2.6) landed b
 | 2.7 | `9c58d86` | `notes/linked-knowledge.ts` — `appendLinkedKnowledgeEntry`: appends under `## Linked Knowledge` (creates the section if absent), dedupe via an `<!-- linked:<id> -->` marker per entry so repeated saves never duplicate. |
 | 2.8 | `fe2f795` | `notes/save-pipeline.ts` — `saveNote`: validate (against the *merged* frontmatter, not a raw update patch) → render/merge (create = direct serialize; update = shallow frontmatter merge + optional body replace) → pull-before-write via injected `SyncPort` (update only) → write → `index.upsert` → Linked Knowledge maintenance → `SyncPort.notifyWrite` → `{ path, id }`. `createNullSyncPort()` for P2 (real engine lands in P3). |
 
-### TDD Cycle Evidence (PR-2 slice)
+#### TDD Cycle Evidence (2.1–2.8)
 
 | Task | RED (failing first) | GREEN | Notes |
 |---|---|---|---|
@@ -266,13 +268,13 @@ notes(parse), rules, util`), not task numbering: `notes/parse.ts` (2.6) landed b
 2. Id derivation and Linked Knowledge's `spec_id` lookup had the same bug (reading `input.frontmatter` instead of the merged result) — fixed alongside #1 once the merged value was available earlier in the function.
 3. A local variable name collision (`frontmatter` re-declared inside `maintainLinkedKnowledgeIfNeeded`, shadowing the parameter of the same name) was caught by the build tool's parser at `npx vitest run`, before any test executed — renamed the inner destructure to `specFile`.
 
-### Files changed (PR-2 slice)
+#### Files changed (2.1–2.8)
 
 - Created: `src/index/types.ts`, `src/index/store.ts`, `src/index/build.ts`, `src/index/upsert.ts`, `src/index/queries.ts`, `src/index/maps.ts`, `src/notes/parse.ts`, `src/notes/linked-knowledge.ts`, `src/notes/save-pipeline.ts`
 - Created (tests): `test/index/store.test.ts`, `test/index/build.test.ts`, `test/index/upsert.test.ts`, `test/index/queries.test.ts`, `test/index/maps.test.ts`, `test/notes/parse.test.ts`, `test/notes/linked-knowledge.test.ts`, `test/notes/save-pipeline.test.ts`
 - Modified: `openspec/changes/add-m1-core/tasks.md` (`[x]` marks + done-notes), this file
 
-### Deviations / clarifications from design (PR-2 slice)
+#### Deviations / clarifications from design (2.1–2.8)
 
 None of these are scope violations — each resolves an ambiguity between tasks.md's literal task text and design.md's prose, in favor of the more defensive/testable reading:
 
@@ -282,17 +284,67 @@ None of these are scope violations — each resolves an ambiguity between tasks.
 4. **`index/maps.ts` markdown layout is this task's own design choice** (bullet list per note, `[title](../path) — \`id\` (status)`) — the design says only "sorted, stable formatting"; no literal format is specified anywhere in the RFC/design/specs read for this scope.
 5. **A note's id, when its type declares no id field (e.g. `session_log`), falls back to its own vault-relative path** — keeps `IndexedNote.id` always populated (queries/find results always carry an `id`) without inventing an id scheme the rules don't declare.
 
-### Issues found
+#### Issues found (2.1–2.8)
 
 None outside the two save-pipeline bugs already caught and fixed within the same TDD cycle (see above) — no known deferred issues from this slice.
 
+### Second apply run (tasks 2.9–2.18) — MCP catalog, tools, server, serve, P2 gate
+
+Same branch (`add-m1-core/pr2-index-notes`), continuing from the first apply run's tip
+(`d8b4f53` at the end of this run). Baseline at the start of this run: `npm test` 240/240
+across 33 files.
+
+| Task | Commit | Summary |
+|---|---|---|
+| 2.9 | `cc7f206` | `mcp/catalog.ts` — pure `buildCatalog(rules)`: exactly six tools, no `project` param; per-type `save` schemas (`saveSchemas`, real required/enum/pattern constraints); descriptions derived from the model. **SDK limitation found and disclosed**: a `z.discriminatedUnion` as a tool's `inputSchema` validates correctly at runtime but renders as an empty JSON schema in `listTools()` (verified against `@modelcontextprotocol/sdk` 1.30.0's `normalizeObjectSchema`, which requires a plain `.shape`). `save`'s *wire* schema is therefore a single flat, permissive object merging every type's fields (`.strict()` on field names only); the true per-type schemas are exposed separately as `saveSchemas` and enforced server-side via `save-pipeline`/`rules/validate.ts`. |
+| 2.10 | `23e3704` | `mcp/resources.ts` — `rules://current` content (parsed rules + raw template text per type) and `readAgentInstructions` for the server `instructions` field. Reuses `util/paths.ts`'s `templatePathFor`. |
+| 2.11 | `fc98ca2` | `mcp/tools/find.ts` — property + free-text search via `index/queries.ts`. Added `test/helpers/create-tool-test-client.ts` (real catalog entry + real handler on a real `McpServer`, real SDK `Client` over `InMemoryTransport.createLinkedPair()`), reused by 2.12–2.15. |
+| 2.12 | `9850682` | `mcp/tools/read-with-context.ts` — content + frontmatter + backlinks (wikilinks + `spec_id`) + referenced specs' status + 5 most recent linked decisions/incidents (sorted by frontmatter `date`, missing dates sort last). |
+| 2.13 | `b97d4d9` | `mcp/tools/save.ts` — thin: resolves the target path from the type's folder + naming template + a title-derived slug (the wire schema carries no explicit path field), delegates entirely to `save-pipeline` for validation/write/index-upsert/Linked-Knowledge. Does **not** call `validateNote` a second time (save-pipeline already does, per 2.8's disclosed decision). |
+| 2.14 | `5c9b1ba` | `mcp/tools/changes-since.ts` — ISO timestamp → git-log walk → local `note(...)` header parser → classify added/updated/status_changed/removed, deduped to the most-recent state per note (id, or `type::title` when no id) so each affected note appears exactly once. |
+| 2.15 | `ec50d04` | `mcp/tools/status.ts` + `sync.ts` — documented stubs coded against the future `EngineState` shape; only engine-owned fields (`pendingWrites`, `conflicts`, `lastSuccessfulSyncAt`, `pushPaused`, `lockOwner`) are stubbed — `staleNotes`/`formatVersion` are computed for real (index + `rules.lifecycle.staleness` + injected `Clock`). `sync.ts` reuses `status.ts`'s `buildEngineStateStub`. |
+| 2.16 | `bd36361` | `mcp/server.ts` — split into pure `createServer(deps)` (catalog + six handlers + `rules://current` resource on an `McpServer`, no I/O) and `serveVault(opts)` (`resolveVaultPath` → `validateBoot` → `loadRules` → `buildIndex`+templates+instructions in parallel → `createServer` → `StdioServerTransport`). No lock/engine wiring — P3. `resolveVaultPath` asserts the byte-exact `NO_VAULT_CONFIGURED_MESSAGE`. |
+| 2.17 | `79e80da` | `cli/commands/serve.ts` — `--vault` flag, never interactive, injectable `serveVault` for testing. Wired `registerServeCommand` into `cli/index.ts`'s `buildProgram()` (necessary for the command to be reachable at all; safety net: `cli/index.ts`'s 11 pre-existing tests stayed green). |
+| 2.18 | `d8b4f53` | P2 phase gate — `test/p2/gate.test.ts`, exercising the *full composed server* (not tools in isolation): exactly six tools with no `project` arg; save-schema enforcement end to end; rules-reload changes behavior with no code change; restart identity with no index artifact ever written; incremental save→find visibility with no restart. |
+
+#### TDD Cycle Evidence (2.9–2.18)
+
+| Task | RED (failing first) | GREEN | Notes |
+|---|---|---|---|
+| 2.9 | module missing | 7/7 | — |
+| 2.10 | module missing | 6/6 | one test-data assumption fixed (a template placeholder name guessed wrong; not a production bug) |
+| 2.11 | module missing | 3/3 | implemented production code before the test once (process slip, caught immediately) — reverted to a scratch file, wrote the test, confirmed RED, restored the implementation, confirmed GREEN, disclosed here rather than silently corrected |
+| 2.12 | module missing | 3/3 | one test-fixture bug fixed (hand-built `IndexedNote` only set `frontmatter.status`, not the top-level lifted field `build.ts` always populates) — not a production bug |
+| 2.13 | module missing | 3/3 | — |
+| 2.14 | module missing | 5/5 | one test bug fixed: `git commit` refuses empty commits by default — test commits needed `--allow-empty` since they exist only to exercise log parsing, not real file changes |
+| 2.15 | module missing | 3/3 | — |
+| 2.16 | module missing | 7/7 | — |
+| 2.17 | module missing | 4/4 (+ 1 new test in the pre-existing `cli/index.test.ts`, 16/16 total across both files) | one test assertion bug fixed: `program.parseAsync()` resolves with the `Command` instance, not `undefined` |
+| 2.18 | n/a (verification guards over already-implemented code, not new feature code — same category as 1.19/1.20) | 5/5 | caught 2 real test-data bugs on first run (fixture `decision_id` must match `DEC-[0-9]+`, not arbitrary text) — fixed the test, not the implementation; the gate itself never needed a production fix |
+
+#### Files changed (2.9–2.18)
+
+- Created: `src/mcp/catalog.ts`, `src/mcp/resources.ts`, `src/mcp/server.ts`, `src/mcp/tools/find.ts`, `src/mcp/tools/read-with-context.ts`, `src/mcp/tools/save.ts`, `src/mcp/tools/changes-since.ts`, `src/mcp/tools/status.ts`, `src/mcp/tools/sync.ts`, `src/cli/commands/serve.ts`
+- Created (tests): `test/mcp/catalog.test.ts` (+ snapshot), `test/mcp/resources.test.ts`, `test/mcp/server.test.ts`, `test/mcp/tools/*.test.ts` (find, read-with-context, save, changes-since, status, sync), `test/helpers/create-tool-test-client.ts`, `test/cli/commands/serve.test.ts`, `test/p2/gate.test.ts`
+- Modified: `src/cli/index.ts` (registers `serve`), `test/cli/index.test.ts` (new coverage for the registration), `openspec/changes/add-m1-core/tasks.md` (`[x]` marks + done-notes), this file
+
+#### Deviations / clarifications from design (2.9–2.18)
+
+1. **`save`'s wire-level `inputSchema` is a flat, permissive object, not a `z.discriminatedUnion`** (2.9) — a concrete, verified SDK limitation (see the 2.9 row above), not a design disagreement. The true per-type schemas exist and are enforced; only the `listTools()` JSON-Schema rendering is affected.
+2. **`save`'s target path is computed by the tool (2.13), not supplied by the caller** — the wire schema (design §5.2) carries frontmatter + content + optional title only, no path field, so something has to derive it; done deterministically from the type's `folder` + `naming` template + a title slug, reusing the shared `deriveTitle`.
+3. **`changes_since` carries its own local commit-header parser** (2.14) rather than importing `src/sync/commit-message.ts`, because that module doesn't exist yet (P3) — tasks.md's own text anticipates this ("unified into `src/sync/commit-message.ts` in 3.2"). P3's wiring task (3.13) is the natural place to fold this parser into the shared grammar module.
+4. **`sync`/`status` stubs expose real `staleNotes`/`formatVersion` today**, not placeholder values — only the fields that genuinely require the P3 engine's runtime state are stubbed. This is an enhancement over the minimum "documented stub" bar, not a scope change.
+
+#### Issues found (2.9–2.18)
+
+None outside the process slip on 2.11 (implemented before writing the test) and the handful of test-data/test-fixture bugs listed in the TDD evidence table above — all caught within the same cycle, none shipped, none affecting production code.
+
 ## Remaining tasks
 
-- Phase 2, tasks 2.9–2.18 (MCP catalog, six tools, `server.ts`, `serve` CLI command, P2 phase gate) — same PR-2, separate apply run.
-- Phase 3 (3.1–3.14): sync engine + grammar + ladder + secrets — PR-3, separate apply run.
+- Phase 3 (3.1–3.14): sync engine + commit grammar + conflict ladder + secrets lint + resolve — PR-3, separate apply run. This also absorbs 2.14's local commit-header parser into `src/sync/commit-message.ts` (3.2) and wires the real `SyncPort`/`IndexPort` into `save-pipeline.ts`/`server.ts` (3.13), replacing the P2 null/stub seams.
 
 ## Workload / PR boundary
 
 - PR-1 = Phase 0 + Phase 1 on `add-m1-core/pr1-scaffold-rules-boot`, base `main`. Estimated ~1,850 lines (forecast) — over the 400-line budget by design; authorized by the resolved chained delivery (stacked-to-main), not a size:exception.
-- PR-2 (this slice, tasks 2.1–2.8) = the in-memory index + notes layer on `add-m1-core/pr2-index-notes`, stacked on PR-1. Forecast for all of Phase 2 (2.1–2.18) is ~1,650 lines; this slice is roughly half of that (index + notes only, no MCP surface yet) — still authorized under the same chained-delivery decision, not a size:exception. Tasks 2.9–2.18 land as a further apply run before PR-2 is considered complete/ready for its own phase gate (2.18).
+- PR-2 (now complete, tasks 2.1–2.18) = the in-memory index + notes layer + MCP layer on `add-m1-core/pr2-index-notes`, stacked on PR-1. Forecast was ~1,650 lines; actual is larger (19 files/~1,970 lines for 2.1–2.8 alone, per the orchestrator's independent count, plus the 2.9–2.18 batch on top) — still authorized under the same chained-delivery decision (stacked-to-main), not a size:exception. PR-2 is now feature-complete per its own phase gate (2.18); only Phase 3 remains before the full M1 scope is done.
 - No push, no PR creation, no npm publish (user-owned) — this agent never pushes or opens PRs; the orchestrator handles both.
