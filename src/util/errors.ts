@@ -35,8 +35,12 @@ export class AppError extends Error {
   readonly code: string;
   readonly hint?: string;
 
-  constructor(code: AppErrorCodeValue | string, message: string, opts?: { hint?: string }) {
-    super(message);
+  constructor(
+    code: AppErrorCodeValue | string,
+    message: string,
+    opts?: { hint?: string; cause?: unknown },
+  ) {
+    super(message, opts?.cause === undefined ? undefined : { cause: opts.cause });
     this.name = "AppError";
     this.code = code;
     this.hint = opts?.hint;
