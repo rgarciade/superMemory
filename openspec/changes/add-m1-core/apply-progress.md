@@ -60,12 +60,19 @@ Scope of this apply run: **Phase 0 (0.1) + Phase 1 (1.1–1.19) only** — the P
 - `test/`: `helpers/` (create-test-vault, create-remote, env), `fixtures/vault/**`, `util/`, `rules/`, `config/`, `boot/`, `cli/`, `p1/gate.test.ts`, `scaffold.test.ts`
 - Modified: `.gitignore`, `openspec/config.yaml`, `openspec/changes/add-m1-core/tasks.md`, this file
 
-### Remediation batch — additional files changed
+### Remediation batch (1st) — additional files changed
 
 - Created: `test/setup/git-env.ts` (vitest `setupFiles` entry — process-wide git config isolation, plus opt-in `buildHermeticGitEnv`), `test/setup/git-env.test.ts`
 - Modified: `src/cli/index.ts`, `src/util/paths.ts`, `src/boot/validate-boot.ts`, `src/cli/commands/init.ts`, `src/cli/commands/setup.ts`, `src/rules/validate.ts`, `vitest.config.ts`
 - Modified (tests): `test/cli/index.test.ts`, `test/util/paths.test.ts`, `test/boot/validate-boot.test.ts`, `test/cli/commands/init.test.ts`, `test/cli/commands/setup.test.ts`, `test/rules/validate.test.ts`, `test/p1/gate.test.ts`
 - Modified (docs): `openspec/changes/add-m1-core/tasks.md` (SHA refresh only), this file (SHA refresh + remediation section)
+
+### Remediation batch (2nd) — additional files changed
+
+- Created: `test/repo-hygiene.test.ts`
+- Modified: `src/cli/commands/init.ts` (tracked rollback, commit pathspec, merge eol/negation), `src/boot/validate-boot.ts` (realpathSync.native), `test/setup/git-env.ts` (broader isolation + in-place clearing), `vitest.config.ts` (comment fix), `.gitignore` (`tmp-sm-*/`)
+- Modified (tests): `test/cli/commands/init.test.ts`, `test/boot/validate-boot.test.ts`, `test/setup/git-env.test.ts`
+- Modified (docs): this file (second remediation batch section)
 
 ## Deviations from design
 
@@ -111,7 +118,41 @@ Grouping note: findings #2+#3 share one commit (same function, `isCommanderExit`
 - Unvalidated timing values from `config.yml`/rules `git:` block (0, negative, NaN sync intervals).
 - Malformed frontmatter throws a raw `YAMLException` instead of `RULES_PARSE_ERROR`.
 - `appRepoRoot()` falls back to `/` if no `package.json` named `supermemory` is found walking up.
-- The check-4 test in `validate-boot.test.ts` creates `tmp-sm-inside-*` directories directly in the repo root without a `.gitignore` entry for that prefix (cleaned up via `finally`, but not gitignored).
+- ~~The check-4 test in `validate-boot.test.ts` creates `tmp-sm-inside-*` directories directly in the repo root without a `.gitignore` entry for that prefix~~ — fixed in the second remediation batch (N6).
+
+## Second remediation batch (post-re-review fixes, PR-1 slice)
+
+A second fresh-context re-review re-blocked the PR: findings #2/#3/#5/#6/#7/#8 from the first batch were confirmed FIXED, but #1 and #4 were only PARTIAL — the rollback mechanism added to fix them could itself delete pre-existing user data. Fixed all of it (N1–N7) on the same branch, strict TDD throughout. `npm test` (164/164), `npm run typecheck`, and `npm run build` all pass at the end of the batch.
+
+| # | Finding | Commit | Fix |
+|---|---|---|---|
+| N1 | CRITICAL — `rollbackScaffold` did `rm(memoryDir, {recursive:true})` on ANY failure — a vault whose `.memory/` already held unrelated content (notes, a hand-written config.yml, a custom template — none of them `rules.md`, so check 3 didn't catch it) lost all of it, permanently, the moment a pre-commit hook rejected the commit | `a09c4e6` | Rollback now tracks every directory/file this run created and the original bytes of every merged file, then undoes ONLY that: created files deleted, created dirs removed deepest-first and only if now empty, merged files restored to their exact original bytes. Pre-existing content is never touched |
+| #4 (fully fixed) | PARTIAL in batch 1 — a write failure BEFORE the commit try block (e.g. EACCES on a pre-existing read-only `specs/`) escaped uncaught: no AppError, no rollback, `rules.md` left behind blocking a re-run | `a09c4e6` (same commit as N1 — same tracked-write/rollback mechanism) | The entire tracked write phase (not just validateBoot+commit) is now wrapped; every failure after the first write rolls back the same way |
+| N4 | After a failed commit the git index stayed dirty (everything staged stayed staged) even though the files were gone — the "scaffold was rolled back" hint was not fully true | `a09c4e6` (same commit — same rollback path) | Rollback also unstages exactly what this run staged (`git reset -q -- <paths>`, safe on an unborn branch since it never references HEAD); hint text now describes what actually happened |
+| N2 | WARNING — `git commit` with no pathspec after `git add(relativePaths)` commits the ENTIRE index, so a file the user had already staged before running init (e.g. `git add .env`) rode along into the init commit | `c514e2e` | `git.commit(message, relativePaths)` restricts the commit itself to the scaffold paths; the user's own staged changes stay staged, untouched (not committed, not discarded) |
+| N3 | WARNING — `realpathSync` (the plain JS implementation) preserves input case even on a case-insensitive-but-case-preserving filesystem (macOS APFS default, Windows), so a differently-cased alias of the app repo root bypassed `assertVaultOutsideAppRepo` | `d7d79ed` | Use `realpathSync.native` (the OS syscall) on both sides instead — case-corrects; ENOENT handling unchanged |
+| N5 | WARNING — `test/setup/git-env.ts` only cleared `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_NOSYSTEM`; a worker launched from a git hook can inherit `GIT_DIR`/`GIT_INDEX_FILE`/`GIT_WORK_TREE`, silently redirecting every child `git` process; `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`/`GIT_CONFIG_PARAMETERS` is a second, uncovered env-based config-injection path; `vitest.config.ts`'s comment claimed a "fixed working identity" that was deliberately NOT applied | `b47c0f0` | Clears all of the above (mutating `process.env` in place — `Object.assign` can't delete keys, a real bug caught while implementing this); comment corrected |
+| N6 | WARNING — two tests intentionally create `tmp-sm-*` directories at the repo root (the "vault inside the app repo" guard needs a target genuinely inside this repo) with no gitignore entry | `b47c0f0` (same commit as N5 — grouped per the "cheap follow-ups, one commit" instruction) | Added `tmp-sm-*/` to `.gitignore` |
+| N7 | WARNING — `mergeMissingLines` didn't preserve CRLF line endings and treated a line as "present" even if a later `!line` negated it (gitignore last-match-wins semantics) | `a09c4e6` (implementation landed with the N1 rollback rewrite — same function, rewritten for tracking anyway); tests added in `b47c0f0` | Detects and preserves the file's own EOL (LF/CRLF); `isEffectivelyPresent` only counts the LAST occurrence among a line and its negation |
+
+Grouping notes: N1/#4/N4 share one commit — they are the exact same tracked-write/rollback mechanism in `initVault` and cannot be meaningfully separated. N5/N6 share one commit per the orchestrator's explicit "cheap follow-ups, one commit is fine" instruction. N7's implementation landed inside the N1 commit (the function it lives in — `mergeMissingLines` — was already being rewritten for tracking; rewriting it twice in two separate commits would have been artificial), with its dedicated regression tests added in the N5/N6 follow-up commit.
+
+**Process deviation, disclosed**: the `c514e2e` (N2) commit's `git add` swept in the test file's already-written-but-not-yet-implemented N1/#4/N4 RED tests (same file, `test/cli/commands/init.test.ts`), because they were staged together by path rather than by hunk. That commit is transiently red in isolation (6 failing tests) until `a09c4e6` lands immediately after. HEAD (the final state) is fully green; no commit was amended or reordered to hide this — it's disclosed here instead.
+
+### TDD Cycle Evidence — second remediation batch
+
+| Finding | RED (failing first) | GREEN | Notes |
+|---|---|---|---|
+| N1/#4/N4 (init.ts rollback) | 7 new tests failing, incl. a direct data-loss repro: `readFile(".memory/notes.txt")` → `ENOENT` (the file was deleted by the old wholesale `rm`) | 22/22 (init.test.ts) | Also manually reproduced `git reset -q -- <path>` working on an unborn branch (exit 0) via raw bash before relying on it in rollback |
+| N2 (commit pathspec) | Manual repro first: `git commit` (no pathspec) after staging both `.env` and `scaffold.txt` put both in `git show --stat` | 1/1 dedicated test, 22/22 file | `git.commit(message, [paths])` confirmed via manual repro to leave `.env` staged-but-uncommitted |
+| N3 (case-variant realpath) | `assertVaultOutsideAppRepo(upperCasedAppRoot)` did not throw; manually confirmed root cause first (`realpathSync.native` vs `realpathSync` on a real `MixedCase`/`MIXEDCASE` dir) | 11/11 (validate-boot.test.ts) | Test skips gracefully (not fail) on a case-sensitive filesystem |
+| N5 (git env noise) | `buildHermeticGitConfigIsolation` left `GIT_DIR`/`GIT_CONFIG_COUNT`/etc. untouched; integration repro: a poisoned `GIT_DIR`/`GIT_WORK_TREE` made `git rev-parse --show-toplevel` resolve to a decoy repo instead of the real one | 9/9 (git-env.test.ts) | Also caught and fixed, via a dedicated RED test, that the `apply*` functions used `Object.assign` to "clear" vars — which cannot delete a key already present on the target |
+| N6 (tmp-sm-* gitignore) | `git check-ignore` on a freshly created `tmp-sm-hygiene-test-*` dir at the repo root returned false (not ignored) | 1/1 (repo-hygiene.test.ts) | — |
+| N7 (merge eol/negation) | Sanity-checked the tests themselves catch a regression: temporarily reverted `isEffectivelyPresent` to a naive `.includes()` check and confirmed the negation test fails, then restored the real implementation | 3/3 dedicated tests, 25/25 file | — |
+
+### Out of scope (unchanged from batch 1, plus nothing new added)
+
+Same list as above — no new deferred items from this batch.
 
 ## Remaining tasks
 
