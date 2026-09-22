@@ -1,0 +1,2 @@
+logs/**     merge=union     # append-only: both sides concatenated
+index/**    merge=ours      # generated: regenerating after merge is fine
