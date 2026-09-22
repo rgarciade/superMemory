@@ -1,7 +1,11 @@
 # Apply Progress — add-m1-core
 
-Phase: apply (PR-1 slice) · Branch: `add-m1-core/pr1-scaffold-rules-boot` (stacked-to-main)
-Scope of this apply run: **Phase 0 (0.1) + Phase 1 (1.1–1.19) only** — the PR-1 work unit of the chained delivery (PR-2 = Phase 2, PR-3 = Phase 3 come in separate runs).
+Phase: apply · Chained delivery (stacked-to-main): PR-1 complete (open as GitHub PR #1) on
+`add-m1-core/pr1-scaffold-rules-boot`; this file also covers the PR-2 slice below,
+tasks 2.1–2.8 (in-memory index + notes layer) on `add-m1-core/pr2-index-notes`,
+stacked on PR-1. Tasks 2.9–2.18 (MCP catalog/tools/server, P2 gate) and Phase 3
+(3.1–3.14, PR-3) remain, in separate apply runs.
+Scope of the original apply run this file started from: **Phase 0 (0.1) + Phase 1 (1.1–1.19) only** — the PR-1 work unit of the chained delivery.
 
 **Note on commit SHAs below**: git history for this branch was rewritten (author email correction) after the table below was first written. All SHAs in this file are the post-rewrite (current) SHAs.
 
@@ -222,12 +226,73 @@ Lands after the PR-1 phase gate (1.19), on the same branch. Strips everything PR
 
 **Spec status**: the `boot-validation`/`tool-catalog` spec deltas and `openspec/config.yaml` were already amended ahead of this task, on this same branch (`cfb8c6d`, `5653f89`) — no spec/implementation contradiction remains.
 
+## PR-2 slice (tasks 2.1–2.8) — in-memory index + notes layer
+
+Branch: `add-m1-core/pr2-index-notes` (stacked-to-main), stacked on `add-m1-core/pr1-scaffold-rules-boot`.
+Scope of this apply run: **tasks 2.1–2.8 only** — the in-memory index (`src/index/`) and the
+notes/save-pipeline layer (`src/notes/`). Tasks 2.9–2.18 (MCP catalog, six tools, `server.ts`,
+`serve` CLI command, P2 phase gate) are a separate, later PR-2 apply run.
+
+Implementation order deliberately followed the module dependency graph (design §1.3: `index →
+notes(parse), rules, util`), not task numbering: `notes/parse.ts` (2.6) landed before
+`index/build.ts` (2.2), since `build.ts` depends on it.
+
+| Task | Commit | Summary |
+|---|---|---|
+| 2.1 | `1ee07ae` | `IndexedNote`/`QueryFilters`/`FindResultItem` types; the in-memory store — by-id/by-path maps and the forward/backward link graph (wikilinks + `spec_id`), `extractWikilinks`. No I/O. |
+| 2.6 | `a6825a0` | `notes/parse.ts` — gray-matter parse; `deriveTitle` (heading → frontmatter `title` → filename slug) and `deriveNoteId` (`id_field` → `<type>_id` → `undefined`), shared by save/grammar/index. Implemented ahead of 2.2–2.5 (dependency). |
+| 2.2 | `5af2877` | `index/build.ts` — `buildIndex(vaultPath, rules)` walks only the folders declared per note type in rules.md (never `.memory/`, `conflicts/`, generated `index/`); `resolveNoteType`/`parseNoteAt` exported and reused by 2.3. No index artifact written; restart identity verified. |
+| 2.3 | `89e8f3c` | `index/upsert.ts` — `upsertNote` re-reads one named file and re-parses it (ENOENT ⇒ `removeNote`); `reparseFiles` loops it over git-named changed paths only — unchanged notes are never re-read (proven in tests via object-reference identity). |
+| 2.4 | `756d4c6` | `index/queries.ts` — the only store read surface: property filters (type/status/spec_id/owner/tags AND/date-range), free-text (title+body substring scan, applied after filters narrow), `backlinks`, deterministic path-sorted ordering, default limit 20. |
+| 2.5 | `a0f3861` | `index/maps.ts` — `generateIndexMaps`: one `index/<type>.md` per note type present in the store, entries sorted by path, byte-identical across repeated generations. |
+| 2.7 | `9c58d86` | `notes/linked-knowledge.ts` — `appendLinkedKnowledgeEntry`: appends under `## Linked Knowledge` (creates the section if absent), dedupe via an `<!-- linked:<id> -->` marker per entry so repeated saves never duplicate. |
+| 2.8 | `fe2f795` | `notes/save-pipeline.ts` — `saveNote`: validate (against the *merged* frontmatter, not a raw update patch) → render/merge (create = direct serialize; update = shallow frontmatter merge + optional body replace) → pull-before-write via injected `SyncPort` (update only) → write → `index.upsert` → Linked Knowledge maintenance → `SyncPort.notifyWrite` → `{ path, id }`. `createNullSyncPort()` for P2 (real engine lands in P3). |
+
+### TDD Cycle Evidence (PR-2 slice)
+
+| Task | RED (failing first) | GREEN | Notes |
+|---|---|---|---|
+| 2.1 | module missing — import failed to resolve | 9/9 | — |
+| 2.6 | module missing | 10/10 | — |
+| 2.2 | module missing | 7/7 | — |
+| 2.3 | module missing | 6/6 | — |
+| 2.4 | module missing | 10/10 | — |
+| 2.5 | module missing | 5/5 | — |
+| 2.7 | module missing | 5/5 | — |
+| 2.8 | module missing | 5/5 (after fixing 2 real bugs found mid-cycle, see below) | — |
+
+**Bugs found and fixed during 2.8's cycle** (both caught by the `saveNote — update` test before it went green, not discovered later):
+1. Validation was running against the raw `input.frontmatter` (a partial patch on update), spuriously rejecting a note that only patched `status` because the patch alone was missing `spec_id`/`owner`. Fixed by validating the *merged* (final) frontmatter instead — reordered to compute the merge before validating.
+2. Id derivation and Linked Knowledge's `spec_id` lookup had the same bug (reading `input.frontmatter` instead of the merged result) — fixed alongside #1 once the merged value was available earlier in the function.
+3. A local variable name collision (`frontmatter` re-declared inside `maintainLinkedKnowledgeIfNeeded`, shadowing the parameter of the same name) was caught by the build tool's parser at `npx vitest run`, before any test executed — renamed the inner destructure to `specFile`.
+
+### Files changed (PR-2 slice)
+
+- Created: `src/index/types.ts`, `src/index/store.ts`, `src/index/build.ts`, `src/index/upsert.ts`, `src/index/queries.ts`, `src/index/maps.ts`, `src/notes/parse.ts`, `src/notes/linked-knowledge.ts`, `src/notes/save-pipeline.ts`
+- Created (tests): `test/index/store.test.ts`, `test/index/build.test.ts`, `test/index/upsert.test.ts`, `test/index/queries.test.ts`, `test/index/maps.test.ts`, `test/notes/parse.test.ts`, `test/notes/linked-knowledge.test.ts`, `test/notes/save-pipeline.test.ts`
+- Modified: `openspec/changes/add-m1-core/tasks.md` (`[x]` marks + done-notes), this file
+
+### Deviations / clarifications from design (PR-2 slice)
+
+None of these are scope violations — each resolves an ambiguity between tasks.md's literal task text and design.md's prose, in favor of the more defensive/testable reading:
+
+1. **Where `validateNote` runs.** Design §5.3 describes `mcp/tools/save.ts` (task 2.13, not in this PR) calling `validateNote` before `save-pipeline`; tasks.md 2.8 lists "validate" as save-pipeline's own first step. Implemented `saveNote` to validate itself (defense in depth, standalone-testable) and surface `ValidationIssue[]` verbatim via a discriminated `SaveNoteResult`.
+2. **Template rendering is out of save-pipeline's scope.** "Render/merge" (2.8) is implemented as direct frontmatter+body serialization on create and a shallow merge on update — `rules/templates.ts`'s `{{placeholder}}` resolution (next_id counters, author/today resolution) is left to whichever upstream component prepares `frontmatter`/`content` before calling `saveNote` (naturally task 2.13 or CLI tooling, not yet built). No spec scenario requires save-pipeline itself to resolve template placeholders.
+3. **Hub type name hardcoded.** Linked Knowledge maintenance treats `"spec"` as the hub type literally, matching consistent RFC/design usage — `NoteTypeDef` has no `isHub`-style flag to derive it from generically.
+4. **`index/maps.ts` markdown layout is this task's own design choice** (bullet list per note, `[title](../path) — \`id\` (status)`) — the design says only "sorted, stable formatting"; no literal format is specified anywhere in the RFC/design/specs read for this scope.
+5. **A note's id, when its type declares no id field (e.g. `session_log`), falls back to its own vault-relative path** — keeps `IndexedNote.id` always populated (queries/find results always carry an `id`) without inventing an id scheme the rules don't declare.
+
+### Issues found
+
+None outside the two save-pipeline bugs already caught and fixed within the same TDD cycle (see above) — no known deferred issues from this slice.
+
 ## Remaining tasks
 
-- Phase 2 (2.1–2.18): in-memory index (design OD-5) + MCP tool catalog — PR-2, separate apply run on a branch stacked on this one.
+- Phase 2, tasks 2.9–2.18 (MCP catalog, six tools, `server.ts`, `serve` CLI command, P2 phase gate) — same PR-2, separate apply run.
 - Phase 3 (3.1–3.14): sync engine + grammar + ladder + secrets — PR-3, separate apply run.
 
 ## Workload / PR boundary
 
 - PR-1 = Phase 0 + Phase 1 on `add-m1-core/pr1-scaffold-rules-boot`, base `main`. Estimated ~1,850 lines (forecast) — over the 400-line budget by design; authorized by the resolved chained delivery (stacked-to-main), not a size:exception.
-- No push, no PR creation, no npm publish (user-owned).
+- PR-2 (this slice, tasks 2.1–2.8) = the in-memory index + notes layer on `add-m1-core/pr2-index-notes`, stacked on PR-1. Forecast for all of Phase 2 (2.1–2.18) is ~1,650 lines; this slice is roughly half of that (index + notes only, no MCP surface yet) — still authorized under the same chained-delivery decision, not a size:exception. Tasks 2.9–2.18 land as a further apply run before PR-2 is considered complete/ready for its own phase gate (2.18).
+- No push, no PR creation, no npm publish (user-owned) — this agent never pushes or opens PRs; the orchestrator handles both.
