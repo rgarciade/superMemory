@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
 import { mkdir, rm, symlink, writeFile, readFile, mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -143,6 +144,19 @@ describe("assertVaultOutsideAppRepo", () => {
     } finally {
       await vault.cleanup();
     }
+  });
+
+  // Second remediation batch, N3 [RED first]: realpathSync (the JS
+  // implementation) preserves input case even on a case-insensitive
+  // filesystem (macOS APFS default, Windows); realpathSync.native uses
+  // the OS syscall, which case-corrects. Only meaningful on a
+  // case-insensitive filesystem — skip (not fail) elsewhere.
+  it("rejects a differently-cased alias of the app repo root (case-insensitive filesystem)", () => {
+    const upperCased = appRepoRootPath.toUpperCase();
+    if (upperCased === appRepoRootPath || !existsSync(upperCased)) {
+      return; // case-sensitive filesystem — this repro cannot occur here
+    }
+    expect(() => assertVaultOutsideAppRepo(upperCased)).toThrow(AppError);
   });
 });
 

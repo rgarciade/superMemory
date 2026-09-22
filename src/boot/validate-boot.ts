@@ -88,19 +88,24 @@ export async function validateBoot(
 
 /**
  * Throws when `vaultPath` IS the supermemory source repository root, or
- * lives inside it. Both sides are resolved with `realpathSync` — a bare
- * string/prefix comparison (or `isInsideDir`'s "the parent itself is
- * not inside" contract, used as-is) would let a symlink alias, a case
- * variant, or `vaultPath === appRoot` (e.g. `supermemory init` run from
- * the app repo root, defaulting to ".") through undetected. Callable
- * standalone so callers that must write nothing to disk before this
- * guard passes (e.g. `initVault`) can run it first.
+ * lives inside it. Both sides are resolved with `realpathSync.native`
+ * — a bare string/prefix comparison (or `isInsideDir`'s "the parent
+ * itself is not inside" contract, used as-is) would let a symlink
+ * alias, a case variant, or `vaultPath === appRoot` (e.g. `supermemory
+ * init` run from the app repo root, defaulting to ".") through
+ * undetected. `realpathSync.native` (the OS syscall) is used instead of
+ * the plain JS `realpathSync`, which preserves input case even on a
+ * case-insensitive-but-case-preserving filesystem (macOS APFS default,
+ * Windows) — a differently-cased path to the exact same directory would
+ * otherwise compare unequal and bypass the guard. Callable standalone
+ * so callers that must write nothing to disk before this guard passes
+ * (e.g. `initVault`) can run it first.
  */
 export function assertVaultOutsideAppRepo(vaultPath: string): void {
-  const appRoot = realpathSync(appRepoRoot());
+  const appRoot = realpathSync.native(appRepoRoot());
   let resolvedVaultPath: string;
   try {
-    resolvedVaultPath = realpathSync(vaultPath);
+    resolvedVaultPath = realpathSync.native(vaultPath);
   } catch (err) {
     throw new AppError(
       "BOOT_VALIDATION_FAILED",
