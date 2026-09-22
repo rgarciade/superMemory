@@ -308,6 +308,225 @@ describe("initVault — commit failure recovery", () => {
   });
 });
 
+// Second remediation batch, N1 CRITICAL [RED first]: rollback must ONLY
+// undo what THIS run created — pre-existing `.memory/` content (a
+// vault that already has a `.memory/` dir, just not `rules.md` yet)
+// must survive a failed commit untouched.
+describe("initVault — rollback never deletes pre-existing content", () => {
+  it("pre-existing .memory/ files and a custom templates/spec.md survive a rolled-back commit", async () => {
+    const root = await freshGitRepo("rollback-no-data-loss");
+    try {
+      await mkdir(path.join(root, ".memory", "templates"), { recursive: true });
+      await writeFile(
+        path.join(root, ".memory", "notes.txt"),
+        "precious notes\n",
+        "utf8",
+      );
+      await writeFile(
+        path.join(root, ".memory", "local.json"),
+        '{"local":true}',
+        "utf8",
+      );
+      await writeFile(
+        path.join(root, ".memory", "config.yml"),
+        "# custom pre-existing config\n",
+        "utf8",
+      );
+      await writeFile(
+        path.join(root, ".memory", "templates", "spec.md"),
+        "custom spec template\n",
+        "utf8",
+      );
+
+      await mkdir(path.join(root, ".git", "hooks"), { recursive: true });
+      const hookPath = path.join(root, ".git", "hooks", "pre-commit");
+      await writeFile(hookPath, "#!/bin/sh\nexit 1\n", "utf8");
+      await chmod(hookPath, 0o755);
+
+      await expect(initVault(root)).rejects.toBeInstanceOf(AppError);
+
+      expect(
+        await readFile(path.join(root, ".memory", "notes.txt"), "utf8"),
+      ).toBe("precious notes\n");
+      expect(
+        await readFile(path.join(root, ".memory", "local.json"), "utf8"),
+      ).toBe('{"local":true}');
+      expect(
+        await readFile(path.join(root, ".memory", "config.yml"), "utf8"),
+      ).toBe("# custom pre-existing config\n");
+      expect(
+        await readFile(
+          path.join(root, ".memory", "templates", "spec.md"),
+          "utf8",
+        ),
+      ).toBe("custom spec template\n");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("restores the original bytes of a pre-existing .gitignore/.gitattributes instead of deleting them", async () => {
+    const root = await freshGitRepo("rollback-restore-git-files");
+    try {
+      const originalGitignore = "node_modules/\n.env\n";
+      const originalGitattributes = "*.png binary\n";
+      await writeFile(path.join(root, ".gitignore"), originalGitignore, "utf8");
+      await writeFile(
+        path.join(root, ".gitattributes"),
+        originalGitattributes,
+        "utf8",
+      );
+
+      await mkdir(path.join(root, ".git", "hooks"), { recursive: true });
+      const hookPath = path.join(root, ".git", "hooks", "pre-commit");
+      await writeFile(hookPath, "#!/bin/sh\nexit 1\n", "utf8");
+      await chmod(hookPath, 0o755);
+
+      await expect(initVault(root)).rejects.toBeInstanceOf(AppError);
+
+      expect(await readFile(path.join(root, ".gitignore"), "utf8")).toBe(
+        originalGitignore,
+      );
+      expect(await readFile(path.join(root, ".gitattributes"), "utf8")).toBe(
+        originalGitattributes,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fully created-and-rolled-back scaffold leaves no trace: .memory/, folders, and vault git files are all gone, index is unstaged", async () => {
+    const root = await freshGitRepo("rollback-full-trace");
+    try {
+      await mkdir(path.join(root, ".git", "hooks"), { recursive: true });
+      const hookPath = path.join(root, ".git", "hooks", "pre-commit");
+      await writeFile(hookPath, "#!/bin/sh\nexit 1\n", "utf8");
+      await chmod(hookPath, 0o755);
+
+      await expect(initVault(root)).rejects.toBeInstanceOf(AppError);
+
+      expect(existsSync(path.join(root, ".memory"))).toBe(false);
+      expect(existsSync(path.join(root, ".gitignore"))).toBe(false);
+      expect(existsSync(path.join(root, ".gitattributes"))).toBe(false);
+      for (const folder of FOLDERS) {
+        // every default folder was created fresh by this run and its
+        // only content (.gitkeep) was rolled back too — deepest-first,
+        // only-if-empty pruning removes the now-empty folder.
+        expect(existsSync(path.join(root, folder))).toBe(false);
+      }
+
+      const git = simpleGit(root);
+      const status = await git.status();
+      expect(status.staged).toEqual([]);
+      expect(status.isClean()).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// N4 [RED first]: the "scaffold was rolled back" hint must be truthful
+// — no lingering staged paths, no lingering files.
+describe("initVault — rollback hint is truthful", () => {
+  it("the failure hint does not claim a rollback happened without actually leaving a clean tree", async () => {
+    const root = await freshGitRepo("rollback-hint-truthful");
+    try {
+      await mkdir(path.join(root, ".git", "hooks"), { recursive: true });
+      const hookPath = path.join(root, ".git", "hooks", "pre-commit");
+      await writeFile(hookPath, "#!/bin/sh\nexit 1\n", "utf8");
+      await chmod(hookPath, 0o755);
+
+      let thrown: AppError | undefined;
+      try {
+        await initVault(root);
+        expect.unreachable("must throw");
+      } catch (err) {
+        thrown = err as AppError;
+      }
+      expect(thrown?.hint).toBeTruthy();
+
+      const git = simpleGit(root);
+      const status = await git.status();
+      expect(status.isClean()).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// #4 PARTIAL [RED first]: a write failure BEFORE the commit try block
+// (e.g. EACCES writing into a pre-existing read-only folder) must also
+// roll back, so a re-run is not refused by "rules.md already exists".
+describe("initVault — rolls back a write failure before the commit phase", () => {
+  it("EACCES writing .gitkeep into a read-only pre-existing folder rolls back rules.md too", async () => {
+    const root = await freshGitRepo("write-failure-rollback");
+    const specsDir = path.join(root, "specs");
+    await mkdir(specsDir, { recursive: true });
+    await chmod(specsDir, 0o500); // read + execute only, no write
+    try {
+      let thrown: unknown;
+      try {
+        await initVault(root);
+        expect.unreachable("must throw");
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(AppError);
+      expect((thrown as AppError).code).toBe("BOOT_VALIDATION_FAILED");
+
+      // rolled back: rules.md must not be left behind blocking a re-run
+      expect(existsSync(path.join(root, ".memory", "rules.md"))).toBe(false);
+    } finally {
+      await chmod(specsDir, 0o700);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a re-run succeeds once the permission problem is fixed", async () => {
+    const root = await freshGitRepo("write-failure-resume");
+    const specsDir = path.join(root, "specs");
+    await mkdir(specsDir, { recursive: true });
+    await chmod(specsDir, 0o500);
+    try {
+      await expect(initVault(root)).rejects.toBeInstanceOf(AppError);
+      await chmod(specsDir, 0o700);
+      const result = await initVault(root);
+      expect(result.committed).toBe(true);
+      const boot = await validateBoot(root);
+      expect(boot.ok).toBe(true);
+    } finally {
+      await chmod(specsDir, 0o700);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// N2 [RED first]: the initial commit must never sweep in files the user
+// had already staged before running init.
+describe("initVault — commits only the scaffold, ignoring pre-staged changes", () => {
+  it("does not include a pre-staged unrelated file in the init commit", async () => {
+    const root = await freshGitRepo("preexisting-stage");
+    try {
+      await writeFile(path.join(root, "secret.env"), "TOKEN=abc\n", "utf8");
+      const git = simpleGit(root);
+      await git.add(["secret.env"]);
+
+      const result = await initVault(root);
+      expect(result.committed).toBe(true);
+
+      const stat = await git.raw(["show", "--stat", "--format=", "HEAD"]);
+      expect(stat).not.toContain("secret.env");
+
+      // the user's staged file is left exactly as they staged it —
+      // neither committed nor discarded.
+      const status = await git.status();
+      expect(status.staged).toContain("secret.env");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("commitInitScaffold", () => {
   it("throws when git resolves the commit with no commit hash (nothing actually committed)", async () => {
     const fakeGit = {

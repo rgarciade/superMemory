@@ -365,10 +365,17 @@ async function mergeMissingLines(filePath: string, content: string): Promise<voi
 }
 
 /**
- * Stages exactly `relativePaths` (never `git add .`) and commits them.
- * Throws when git resolves the commit without an actual commit hash —
- * simple-git resolves normally (no throw) when there is nothing to
- * commit, which would otherwise be silently reported as success.
+ * Stages exactly `relativePaths` (never `git add .`) and commits ONLY
+ * those paths (never a bare `git commit` with no pathspec) — if the
+ * user already had unrelated changes staged before running init (e.g.
+ * `git add .env`), a pathspec-less commit would sweep those into the
+ * init commit too. `git commit -- <pathspec>` restricts the commit to
+ * exactly the given paths regardless of anything else in the index,
+ * leaving the user's own staged changes staged (neither committed nor
+ * discarded). Throws when git resolves the commit without an actual
+ * commit hash — simple-git resolves normally (no throw) when there is
+ * nothing to commit, which would otherwise be silently reported as
+ * success.
  */
 export async function commitInitScaffold(
   git: SimpleGit,
@@ -376,7 +383,7 @@ export async function commitInitScaffold(
   message: string,
 ): Promise<void> {
   await git.add(relativePaths);
-  const result = await git.commit(message);
+  const result = await git.commit(message, relativePaths);
   if (!result.commit) {
     throw new Error(
       "git resolved the commit with no commit hash — nothing was actually committed",
