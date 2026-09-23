@@ -222,6 +222,53 @@ describe("save (in-memory transport)", () => {
     }
   });
 
+  it("falls back to an id-based slug when the title produces an empty ASCII slug (fresh-context review finding 7)", async () => {
+    const { vault, client, close } = await setup();
+    try {
+      const result = await client.callTool({
+        name: "save",
+        // CJK-only title: slugify() strips all non-ASCII, so the naive
+        // slug is empty.
+        arguments: { type: "incident", incident_id: "INC-1", content: "# ログイン障害\n" },
+      });
+      expect(result.isError).toBeFalsy();
+      const payload = result.structuredContent as { path: string };
+      expect(payload.path.endsWith("/.md")).toBe(false);
+      expect(path.basename(payload.path).startsWith(".")).toBe(false);
+      expect(payload.path).toBe("incidents/inc-1.md");
+
+      const onDisk = await readFile(path.join(vault.root, payload.path), "utf8");
+      expect(onDisk).toContain("incident_id: INC-1");
+    } finally {
+      await close();
+      await vault.cleanup();
+    }
+  });
+
+  it("refuses a save whose title produces an empty slug AND has no id to fall back on, rather than writing a hidden dotfile", async () => {
+    const { vault, client, close } = await setup();
+    try {
+      const result = await client.callTool({
+        name: "save",
+        arguments: {
+          type: "session_log",
+          date: "2026-01-01",
+          actor: "agent",
+          content: "# ログ\n", // CJK-only, session_log has no id field at all
+        },
+      });
+      expect(result.isError).toBe(true);
+
+      // logs/.gitkeep is a pre-existing scaffold file — only check for a
+      // hidden .md note, which is what this fix specifically prevents.
+      const entries = await readdir(path.join(vault.root, "logs")).catch(() => []);
+      expect(entries.some((e) => e.startsWith(".") && e.endsWith(".md"))).toBe(false);
+    } finally {
+      await close();
+      await vault.cleanup();
+    }
+  });
+
   it("maintains the target spec's Linked Knowledge section without duplicating on a repeated save", async () => {
     const { vault, client, close } = await setup();
     try {

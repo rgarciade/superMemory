@@ -63,15 +63,18 @@ export function createSaveHandler(deps: SaveDeps) {
     const content = typeof rawContent === "string" ? rawContent : "";
     const titleValue = typeof titleArg === "string" ? titleArg : undefined;
 
+    const incomingId = deriveNoteId(type, frontmatter, def);
     const title = deriveTitle(content, titleValue !== undefined ? { title: titleValue } : {}, "untitled.md");
-    const notePath = resolvePath(def.folder, def.naming, frontmatter, title);
+    const resolved = resolvePath(def.folder, def.naming, frontmatter, title, incomingId);
+    if ("error" in resolved) return errorResult(resolved.error);
+    const notePath = resolved.path;
 
     // A naming template that doesn't fully disambiguate (no template at
     // all, or one that doesn't reference every id-bearing field) can
     // collide two different notes onto the same path. Never silently
     // overwrite a note that isn't the one being saved: if the target
     // already exists, its derived id must match the incoming id exactly.
-    const conflict = await detectPathConflict(deps.vaultPath, notePath, type, def, frontmatter);
+    const conflict = await detectPathConflict(deps.vaultPath, notePath, type, def, incomingId);
     if (conflict) return errorResult(conflict, { path: notePath });
 
     const result = await saveNote(
@@ -111,7 +114,7 @@ async function detectPathConflict(
   notePath: string,
   type: string,
   def: NoteTypeDef,
-  incomingFrontmatter: Record<string, unknown>,
+  incomingId: string | undefined,
 ): Promise<string | undefined> {
   const fileAbs = path.join(vaultPath, notePath);
   let raw: string;
@@ -123,7 +126,6 @@ async function detectPathConflict(
 
   const { frontmatter: existingFrontmatter } = parseNoteFile(raw);
   const existingId = deriveNoteId(type, existingFrontmatter, def);
-  const incomingId = deriveNoteId(type, incomingFrontmatter, def);
 
   if (incomingId !== undefined && incomingId === existingId) {
     return undefined; // same note, re-saved — an intentional update
@@ -136,21 +138,39 @@ async function detectPathConflict(
   );
 }
 
-/** Deterministic path from the type's folder + naming template + a title slug. */
+/**
+ * Deterministic path from the type's folder + naming template + a title
+ * slug. `slugify` strips all non-ASCII, so a non-ASCII-only title (e.g.
+ * CJK) can produce an empty slug — falls back to a slugified id when the
+ * title's own slug is empty; if BOTH are empty, refuses rather than ever
+ * writing a hidden dotfile like `folder/.md` (fresh-context review
+ * finding 7).
+ */
 function resolvePath(
   folder: string,
   naming: string | undefined,
   frontmatter: Record<string, unknown>,
   title: string,
-): string {
-  const slug = slugify(title);
+  fallbackId: string | undefined,
+): { path: string } | { error: string } {
+  const titleSlug = slugify(title);
+  const slug = titleSlug !== "" ? titleSlug : slugify(fallbackId ?? "");
+  if (slug === "") {
+    return {
+      error:
+        "could not derive a safe file name: the title produced an empty slug " +
+        "(e.g. non-ASCII-only text) and no id is available to fall back on — " +
+        "provide an ASCII title, or an id field the note type declares",
+    };
+  }
+
   const fileName = (naming ?? "{slug}.md").replace(/\{([A-Za-z0-9_]+)\}/g, (token, key: string) => {
     if (key === "slug") return slug;
     const value = frontmatter[key];
     return typeof value === "string" ? value : token;
   });
   const normalizedFolder = folder.endsWith("/") ? folder : `${folder}/`;
-  return `${normalizedFolder}${fileName}`;
+  return { path: `${normalizedFolder}${fileName}` };
 }
 
 function formatZodError(error: z.ZodError): string {
