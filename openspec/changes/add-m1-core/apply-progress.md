@@ -339,6 +339,59 @@ across 33 files.
 
 None outside the process slip on 2.11 (implemented before writing the test) and the handful of test-data/test-fixture bugs listed in the TDD evidence table above — all caught within the same cycle, none shipped, none affecting production code.
 
+## PR-2 remediation batch (fresh-context review fixes)
+
+A fresh-context pre-PR review blocked PR-2 on 2 CRITICAL data-loss defects plus 8
+follow-ups (4 WARNING, 4 SUGGESTION). All 10 are fixed on the same branch, each as its
+own RED-first work-unit commit (strict TDD; findings 5/8/10 are test-quality/hardening
+fixes without new production behavior to describe with a conventional failing test, so
+each used the closest equivalent — a demonstrated tautology, a real crash reproduction,
+or a strengthened assertion — documented per-finding below). `npm test` (307/307),
+`npm run typecheck`, and `npm run build` all pass after every commit in this batch.
+Baseline at the start of this batch: `npm test` 287/287 across 41 files.
+
+| # | Severity | Finding | Commit | Fix |
+|---|---|---|---|---|
+| 1 | CRITICAL | `mcp/tools/save.ts`'s `resolvePath`: a note type with no `naming` template (`incident`, `session_log`) falls back to `folder/<title-slug>.md`, so two different notes sharing a title silently collided — the second save clobbered the first with no error | `5c08b69` | `detectPathConflict` reads the existing file (if any) at the resolved path and compares its derived id against the incoming save's derived id; a mismatch (or no derivable id at all) refuses the write and names the conflicting path. Only a path whose existing note derives the exact same id is treated as an intentional update. Append/union semantics for id-less types (`session_log`) is explicitly a Phase 3 sync question — not solved here. |
+| 2 | CRITICAL | `index/store.ts`: two notes deriving the same id desynced `byId`/`byPath` (`byId.size 1`, `byPath.size 2`), and a later `removeNote` on either path could delete the OTHER note's `byId` entry and orphan its back-edges — reachable via a pull landing a duplicate id | `dc5dba9` | `putNote` now rejects a note whose id is already owned by a DIFFERENT path, mutating nothing on rejection. `removeNote` only clears the `byId` slot when it still points at the exact note being removed. `build.ts`/`upsert.ts` needed no changes — both already ignore `putNote`'s return value, so a rejected note is safely skipped rather than corrupting an existing entry; verified with a new `build.ts` regression test (first file wins deterministically, no crash) alongside `store.ts`'s own invariant tests. |
+| 3 | WARNING | Seven call sites outside `src/index` read `store.byId` directly (`read-with-context.ts` ×5, `status.ts` ×1, `save-pipeline.ts` ×1), breaking the OD-5 swap seam and making `find.ts`'s own comment ("queries.ts is the only reader") false | `ba365e0` | Added `getNoteById`/`listNotes` to `queries.ts`; routed all seven call sites through them. No behavior change — the existing test suites for all three callers are the safety net. Corrected `find.ts`'s comment now that the invariant genuinely holds (verified with a repo-wide grep: zero remaining violations). |
+| 4 | WARNING | `catalog.ts`'s flat wire schema (the SDK workaround from 2.9) merges every type's fields as `z.unknown().optional()`, and `validateNote` only checks the declared type's OWN fields, so `save({type:"decision", decision_id:"DEC-10", actor:"root", incident_id:"INC-99"})` succeeded and wrote foreign fields into the decision's frontmatter | `8708931` | `save.ts` re-parses `args` through `catalog.saveSchemas[type]` — the true, per-type `.strict()` schema — before doing anything else. Normalizes zod issues to the same `{field, message}` shape `ValidationIssue[]` already exposes (so the pre-existing "names the violated field" test needed no changes) and gives the regex validator an explicit message naming the pattern (zod's default "Invalid" doesn't). |
+| 5 | WARNING | `test/mcp/server.test.ts`'s `NO_VAULT_CONFIGURED_MESSAGE` assertion compared the thrown message against the imported constant — tautological, would still pass if the constant's value drifted from the spec wording; apply-progress claimed otherwise | `042b4fd` | Added a test asserting the literal string directly. Verified genuinely (not assumed): temporarily mutated the constant's value, confirmed the OLD test still passed (proving the tautology) and the NEW test correctly failed, then reverted the mutation before committing — no `mktemp` needed since the repro was a source-level, not filesystem-level, mutation. Corrected apply-progress's earlier inaccurate claim. |
+| 6 | WARNING | `catalog.ts`'s `describeSync` promised "pull, commit pending writes, push" with no hint the P2 handler is a no-op — the stub disclaimer only lived in the response `note` field, which an agent reads AFTER deciding to call the tool | `36e23a6` | Appends `status.ts`'s `ENGINE_STUB_NOTE` (single source of truth, no duplicated wording) to the description itself. Updated the catalog snapshot for this intentional, disclosed change — diff confirmed to touch only the `sync` entry. |
+| 7 | SUGGESTION | `save.ts`'s `slugify` strips all non-ASCII, so a CJK-only (or otherwise non-ASCII-only) title produced an empty slug — a type with no naming template wrote a hidden `folder/.md` dotfile, which `build.ts` still indexes | `29c964d` | `resolvePath` falls back to a slugified id when the title's own slug is empty, and refuses the save outright (naming the reason) when BOTH are empty. `detectPathConflict` now takes the already-derived id directly instead of recomputing it. |
+| 8 | SUGGESTION | `save-pipeline.ts`'s `mergeNoteContent` (`access`+`readFile`) ran before `validateNote`, so a path escaping the type's declared folder was stat'd and read before being rejected | `1a946ec` | Worse in practice than described: reproduced with a directory sitting just outside the vault — the old ordering made `readFile()` throw `EISDIR` **uncaught** instead of returning a clean validation result. Adds a folder-only pre-check (reusing `validateNote`, filtered to `"folder"` issues) before any filesystem access; the real per-field validation on the merged frontmatter is unchanged and still runs after the write path is confirmed safe. |
+| 9 | SUGGESTION | `find.ts`/`changes-since.ts`: `new Date("garbage")` is a truthy Invalid Date, so an unparseable `date_from`/`date_to`/`since` was silently misinterpreted (every comparison against it is `false`) instead of raising an actionable error | `9e6c3e4` | Both tools validate their date argument(s) up front and return a clear `isError` result naming the offending value before building filters / walking git log. |
+| 10 | SUGGESTION | `test/p2/gate.test.ts`: the restart-identity test compared two builds of an EMPTY, unmodified vault (both sides trivially `{results: []}`) and never called `read_with_context` though the index spec's scenario names both; the save-schema test asserted only `isError === true`, passing for any failure cause | `f92fe90` | Restart identity now seeds a linked spec+decision, asserts both `find`/`read_with_context` results are non-trivial BEFORE comparing (so an accidental empty result on both sides can't pass vacuously), and compares both across the simulated restart. The save-schema test now pins the specific missing field (`decision_id`) and triangulates with an otherwise-identical save that supplies it. |
+
+### TDD Cycle Evidence — remediation batch
+
+| # | RED (failing first / defect reproduced) | GREEN | Notes |
+|---|---|---|---|
+| 1 | New tests: second `incident` save with a colliding title returned `isError: undefined` (silently succeeded, overwriting the first) | 6/6 (`save.test.ts`) | — |
+| 2 | New `store.test.ts` tests: `putNote` returned `undefined` where `{ok:true}`/`{ok:false}` was expected; the `removeNote` precise-match test found the impostor's removal deleted the real owner's `byId` entry | 13/13 (`store.test.ts`) + 8/8 (`build.test.ts`, bonus regression test) | — |
+| 3 | New `queries.test.ts` tests: `getNoteById`/`listNotes` were `is not a function` | 14/14 (`queries.test.ts`); all three callers' pre-existing suites stayed green throughout (behavior-preserving refactor, confirmed via `npm test` before commit) | — |
+| 4 | New `save.test.ts` test: a decision save carrying `actor`/`incident_id` returned `isError: undefined` (foreign fields silently written) | 7/7, then 9/9 after finding 7 landed on the same file | Fixing this broke a PRE-EXISTING test (`.field` shape mismatch, zod issues vs `ValidationIssue[]`) — diagnosed and fixed via `toSaveIssues` normalization rather than reverting or weakening the new fix |
+| 5 | New `server.test.ts` test: manually mutated `NO_VAULT_CONFIGURED_MESSAGE`'s value, confirmed the OLD test still passed and the NEW literal-string test failed; reverted before implementing (nothing to "implement" — the fix IS the new test) | 8/8 (`server.test.ts`) | Verification-only finding: no production code changed |
+| 6 | New `catalog.test.ts` test: `sync` tool description didn't match `/P3/` | 8/8 (`catalog.test.ts`), snapshot updated for the one intentional description change | — |
+| 7 | New `save.test.ts` tests: CJK-only incident title produced `incidents/.md`; CJK-only session_log title succeeded and wrote a hidden dotfile | 9/9 (`save.test.ts`) | — |
+| 8 | New `save-pipeline.test.ts` test: a directory sitting outside the vault at the traversal path made `saveNote` throw `EISDIR` uncaught instead of resolving `{ok:false}` | 6/6 (`save-pipeline.test.ts`) | Real OS-level repro (an actual directory, not a mock) |
+| 9 | New `find.test.ts`/`changes-since.test.ts` tests: an unparseable `date_from`/`since` returned `isError: undefined` | 4/4 (`find.test.ts`) + 6/6 (`changes-since.test.ts`) | — |
+| 10 | N/A — test-quality strengthening of already-passing tests, not new production behavior; verified the strengthened assertions actually catch what they claim to (triangulation: an otherwise-identical save WITH the required field must still succeed) | 5/5 (`test/p2/gate.test.ts`) | Caught one test-data bug of my own mid-cycle (`DEC-gate` doesn't match `DEC-[0-9]+`) — fixed the test, not the implementation |
+
+### Process notes (disclosed)
+
+- All fixes landed on the SAME branch (`add-m1-core/pr2-index-notes`) per the
+  orchestrator's instruction — no history rewrite (the earlier commit-trailer rewrite
+  mentioned in this file's header was already done by the user before this batch
+  started; SHAs throughout this file are current).
+- No `Co-Authored-By`/`Claude-Session` trailers on any of the 10 remediation commits
+  (verified with a `git log` grep scan across the whole batch before reporting).
+- Repro artifacts (the temporarily-mutated constant for finding 5, the outside
+  directory for finding 8) were either reverted in-place before committing (finding 5)
+  or created and torn down entirely within the test itself — a uniquely-named sibling
+  directory just outside the vault root, removed via `rm(..., {recursive:true,force:true})`
+  in a `finally` block (finding 8) — nothing repro-related was ever committed.
+
 ## Remaining tasks
 
 - Phase 3 (3.1–3.14): sync engine + commit grammar + conflict ladder + secrets lint + resolve — PR-3, separate apply run. This also absorbs 2.14's local commit-header parser into `src/sync/commit-message.ts` (3.2) and wires the real `SyncPort`/`IndexPort` into `save-pipeline.ts`/`server.ts` (3.13), replacing the P2 null/stub seams.
@@ -346,5 +399,5 @@ None outside the process slip on 2.11 (implemented before writing the test) and 
 ## Workload / PR boundary
 
 - PR-1 = Phase 0 + Phase 1 on `add-m1-core/pr1-scaffold-rules-boot`, base `main`. Estimated ~1,850 lines (forecast) — over the 400-line budget by design; authorized by the resolved chained delivery (stacked-to-main), not a size:exception.
-- PR-2 (now complete, tasks 2.1–2.18) = the in-memory index + notes layer + MCP layer on `add-m1-core/pr2-index-notes`, stacked on PR-1. Forecast was ~1,650 lines; actual is larger (19 files/~1,970 lines for 2.1–2.8 alone, per the orchestrator's independent count, plus the 2.9–2.18 batch on top) — still authorized under the same chained-delivery decision (stacked-to-main), not a size:exception. PR-2 is now feature-complete per its own phase gate (2.18); only Phase 3 remains before the full M1 scope is done.
+- PR-2 (now complete, tasks 2.1–2.18, plus a 10-finding remediation batch) = the in-memory index + notes layer + MCP layer on `add-m1-core/pr2-index-notes`, stacked on PR-1. Forecast was ~1,650 lines; actual is larger (19 files/~1,970 lines for 2.1–2.8 alone, per the orchestrator's independent count, plus the 2.9–2.18 batch and the remediation batch on top) — still authorized under the same chained-delivery decision (stacked-to-main), not a size:exception. PR-2 is feature-complete per its own phase gate (2.18) and has cleared its first fresh-context pre-PR review (2 CRITICAL + 8 follow-up findings, all fixed); only Phase 3 remains before the full M1 scope is done.
 - No push, no PR creation, no npm publish (user-owned) — this agent never pushes or opens PRs; the orchestrator handles both.
