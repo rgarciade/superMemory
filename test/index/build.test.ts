@@ -133,6 +133,33 @@ describe("buildIndex", () => {
     }
   });
 
+  it("does not corrupt the index when two files declare the same id (e.g. a pull landing a duplicate) — first file wins deterministically, no crash", async () => {
+    const vault = await createTestVault({
+      seedNotes: [
+        { path: "decisions/DEC-1-a.md", content: DECISION_NOTE },
+        {
+          path: "decisions/DEC-1-b.md",
+          content: DECISION_NOTE.replace("Use an in-memory index", "A different, colliding decision"),
+        },
+      ],
+    });
+    try {
+      const rules = await loadRules(vault.root);
+      const store = await buildIndex(vault.root, rules);
+
+      // Deterministic: listMarkdownFiles sorts paths, so "a.md" is parsed
+      // first and wins the id slot; "b.md" is rejected by putNote, never
+      // silently corrupting "a.md"'s entry.
+      expect(store.byId.size).toBe(1);
+      expect(store.byId.get("DEC-1")?.path).toBe("decisions/DEC-1-a.md");
+      expect(store.byId.get("DEC-1")?.title).toBe("Use an in-memory index");
+      expect(store.byPath.has("decisions/DEC-1-a.md")).toBe(true);
+      expect(store.byPath.has("decisions/DEC-1-b.md")).toBe(false);
+    } finally {
+      await vault.cleanup();
+    }
+  });
+
   it("ignores non-note folders such as .memory/templates and index/", async () => {
     const vault = await createTestVault({
       seedNotes: [{ path: "specs/SPEC-search-spec.md", content: SPEC_NOTE }],

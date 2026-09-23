@@ -79,6 +79,55 @@ describe("putNote", () => {
     putNote(store, incident);
     expect(store.backwardLinks.get("SPEC-search")?.has("INC-1")).toBe(true);
   });
+
+  // Fresh-context review finding 2: two different notes deriving the same
+  // id must never desync byId/byPath (byId.size 1, byPath.size 2 is the
+  // reported corruption — reachable via a pull landing a duplicate id).
+  it("rejects a note claiming an id already owned by a DIFFERENT path, leaving both maps unchanged", () => {
+    const store = createStore();
+    const first = note({ id: "DEC-1", path: "decisions/a.md" });
+    const second = note({ id: "DEC-1", path: "decisions/b.md", title: "A different note" });
+
+    const firstResult = putNote(store, first);
+    expect(firstResult).toEqual({ ok: true });
+
+    const secondResult = putNote(store, second);
+    expect(secondResult).toEqual({ ok: false, conflictingPath: "decisions/a.md" });
+
+    // No desync: exactly one note is indexed, under its own path/id only.
+    expect(store.byId.size).toBe(1);
+    expect(store.byPath.size).toBe(1);
+    expect(store.byId.get("DEC-1")).toBe(first);
+    expect(store.byPath.get("decisions/a.md")).toBe(first);
+    expect(store.byPath.has("decisions/b.md")).toBe(false);
+  });
+
+  it("allows re-putting the SAME path under the same id (an update, not a collision)", () => {
+    const store = createStore();
+    const original = note({ id: "DEC-1", path: "decisions/a.md", status: "proposed" });
+    const updated = note({ id: "DEC-1", path: "decisions/a.md", status: "accepted" });
+
+    expect(putNote(store, original)).toEqual({ ok: true });
+    expect(putNote(store, updated)).toEqual({ ok: true });
+
+    expect(store.byId.size).toBe(1);
+    expect(store.byPath.size).toBe(1);
+    expect(store.byId.get("DEC-1")).toBe(updated);
+  });
+
+  it("allows a note at the same path to change its own id, cleaning up the old id mapping", () => {
+    const store = createStore();
+    const original = note({ id: "DEC-1", path: "decisions/a.md" });
+    const renamed = note({ id: "DEC-2", path: "decisions/a.md" });
+
+    putNote(store, original);
+    const result = putNote(store, renamed);
+
+    expect(result).toEqual({ ok: true });
+    expect(store.byId.has("DEC-1")).toBe(false); // stale id mapping cleaned up
+    expect(store.byId.get("DEC-2")).toBe(renamed);
+    expect(store.byPath.get("decisions/a.md")).toBe(renamed);
+  });
 });
 
 describe("removeNote", () => {
@@ -104,6 +153,29 @@ describe("removeNote", () => {
     const store = createStore();
     expect(() => removeNote(store, "nowhere.md")).not.toThrow();
     expect(store.byId.size).toBe(0);
+  });
+
+  // Fresh-context review finding 2: removeNote must only clear the byId
+  // slot when it still points at the exact note being removed — never an
+  // unrelated note that happens to share the same id (defensive, in case
+  // a byId/byPath desync ever arises through a path other than putNote).
+  it("only clears the byId entry when it currently points at the note being removed", () => {
+    const store = createStore();
+    const owner = note({ id: "DEC-1", path: "decisions/owner.md" });
+    putNote(store, owner);
+
+    // Simulate a hypothetical desync: byPath gains a second entry sharing
+    // the same id, without going through putNote's collision guard.
+    const impostor = note({ id: "DEC-1", path: "decisions/impostor.md" });
+    store.byPath.set(impostor.path, impostor);
+
+    removeNote(store, impostor.path);
+
+    // The impostor's own path entry is gone, but the real owner (still
+    // the one byId actually points at) must survive untouched.
+    expect(store.byPath.has(impostor.path)).toBe(false);
+    expect(store.byId.get("DEC-1")).toBe(owner);
+    expect(store.byPath.get("decisions/owner.md")).toBe(owner);
   });
 });
 

@@ -26,8 +26,29 @@ export function createStore(): IndexStore {
   };
 }
 
-/** Inserts or replaces a note (keyed by path — a re-put at the same path is an update). */
-export function putNote(store: IndexStore, note: IndexedNote): void {
+export interface PutNoteResult {
+  ok: boolean;
+  /** Set when `ok` is false: the path currently owning the conflicting id. */
+  conflictingPath?: string;
+}
+
+/**
+ * Inserts or replaces a note (keyed by path — a re-put at the same path is
+ * an update). Rejects a note whose id is already owned by a DIFFERENT
+ * path instead of silently overwriting the `byId` slot: two notes
+ * deriving the same id (e.g. from a pull landing a duplicate) must never
+ * desync `byId`/`byPath` (fresh-context review finding 2) — the earlier
+ * behavior left `byId.size` and `byPath.size` disagreeing, and a later
+ * `removeNote` could delete an unrelated note's entry. Nothing is
+ * mutated on rejection: the caller decides how to handle the conflict
+ * (skip, log, surface an error).
+ */
+export function putNote(store: IndexStore, note: IndexedNote): PutNoteResult {
+  const existingById = store.byId.get(note.id);
+  if (existingById && existingById.path !== note.path) {
+    return { ok: false, conflictingPath: existingById.path };
+  }
+
   removeNote(store, note.path);
   store.byId.set(note.id, note);
   store.byPath.set(note.path, note);
@@ -42,15 +63,22 @@ export function putNote(store: IndexStore, note: IndexedNote): void {
     }
     backSet.add(note.id);
   }
+  return { ok: true };
 }
 
-/** Drops the note at `path` (if any) and its outgoing link edges. */
+/**
+ * Drops the note at `path` (if any) and its outgoing link edges. Only
+ * clears the `byId` slot when it still points at THIS exact note — never
+ * an unrelated note that happens to share the same id (finding 2).
+ */
 export function removeNote(store: IndexStore, path: string): void {
   const existing = store.byPath.get(path);
   if (!existing) return;
 
   store.byPath.delete(path);
-  store.byId.delete(existing.id);
+  if (store.byId.get(existing.id) === existing) {
+    store.byId.delete(existing.id);
+  }
 
   const targets = store.forwardLinks.get(existing.id);
   store.forwardLinks.delete(existing.id);
