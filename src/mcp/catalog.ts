@@ -99,7 +99,9 @@ function fieldToZod(def: FieldDef): z.ZodTypeAny {
   let base: z.ZodTypeAny;
   switch (def.type) {
     case "string":
-      base = def.pattern ? z.string().regex(new RegExp(def.pattern)) : z.string();
+      base = def.pattern
+        ? z.string().regex(new RegExp(def.pattern), `must match the pattern ${def.pattern}`)
+        : z.string();
       break;
     case "enum": {
       const values = def.values ?? [];

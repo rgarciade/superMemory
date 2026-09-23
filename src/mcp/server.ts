@@ -78,6 +78,7 @@ export function createServer(deps: ServerDeps): McpServer {
       clock: deps.clock,
       syncPort,
       via: "mcp",
+      saveSchemas: catalog.saveSchemas,
     }) as (args: never) => Promise<CallToolResult>,
     changes_since: createChangesSinceHandler({ vaultPath: deps.vaultPath }) as (
       args: never,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { buildIndex } from "../../../src/index/build.js";
 import { buildCatalog } from "../../../src/mcp/catalog.js";
@@ -63,6 +63,7 @@ async function setup(): Promise<{
         clock: fixedClock,
         syncPort: createNullSyncPort(),
         via: "test",
+        saveSchemas: catalog.saveSchemas,
       }) as never,
     },
   ]);
@@ -115,6 +116,33 @@ describe("save (in-memory transport)", () => {
 
       const onDisk = await readFile(path.join(vault.root, payload.path), "utf8");
       expect(onDisk).toContain("Use an in-memory index");
+    } finally {
+      await close();
+      await vault.cleanup();
+    }
+  });
+
+  it("rejects foreign fields from another note type — the flat wire schema must not let a decision save carry incident/session_log fields (fresh-context review finding 4)", async () => {
+    const { vault, store, client, close } = await setup();
+    try {
+      const result = await client.callTool({
+        name: "save",
+        arguments: {
+          type: "decision",
+          decision_id: "DEC-10",
+          spec_id: "SPEC-search",
+          actor: "root", // belongs to session_log, not decision
+          incident_id: "INC-99", // belongs to incident, not decision
+          content: "# Sneaky decision\n",
+        },
+      });
+      expect(result.isError).toBe(true);
+
+      // Nothing written or indexed: rejected before save-pipeline ever ran.
+      expect(store.byId.has("DEC-10")).toBe(false);
+      const decisionsDir = path.join(vault.root, "decisions");
+      const entries = await readdir(decisionsDir).catch(() => []);
+      expect(entries.filter((e) => e.endsWith(".md"))).toEqual([]);
     } finally {
       await close();
       await vault.cleanup();

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import type { IndexStore } from "../../index/store.js";
 import { deriveNoteId, deriveTitle, parseNoteFile } from "../../notes/parse.js";
 import { saveNote, type SyncPort } from "../../notes/save-pipeline.js";
@@ -8,12 +9,20 @@ import type { NoteTypeDef, RulesModel } from "../../rules/types.js";
 import type { Clock } from "../../util/clock.js";
 
 /**
- * `save` — thin: zod schema check (already enforced by the SDK before this
- * handler runs) -> validateNote (via `notes/save-pipeline`, violation
- * returned verbatim) -> save-pipeline (tool-catalog spec: "save —
+ * `save` — thin: schema check -> validateNote (via `notes/save-pipeline`,
+ * violation returned verbatim) -> save-pipeline (tool-catalog spec: "save —
  * validated create and update"). No separate validateNote call here:
  * save-pipeline already performs it (design 5.3/2.8) — a second call here
  * would be pure duplication against the same rules and frontmatter.
+ *
+ * Two schema layers, not one (fresh-context review finding 4): the SDK
+ * enforces `catalog.ts`'s WIRE schema before this handler runs, but that
+ * schema is a single flat object merging every declared type's fields
+ * (a documented SDK limitation — see catalog.ts), so it cannot reject a
+ * field that belongs to a DIFFERENT type. This handler re-parses `args`
+ * through `catalog.saveSchemas[type]` — the true, per-type `.strict()`
+ * schema — before doing anything else, so a `decision` save can never
+ * carry `incident`/`session_log` fields into the written frontmatter.
  */
 
 export interface SaveDeps {
@@ -24,6 +33,8 @@ export interface SaveDeps {
   syncPort: SyncPort;
   /** Provenance recorded on the write event (e.g. "mcp:claude", "cli"). */
   via: string;
+  /** `catalog.saveSchemas` — the true per-type schemas (catalog.ts §wire-schema note). */
+  saveSchemas: Record<string, z.ZodObject<z.ZodRawShape>>;
 }
 
 export function createSaveHandler(deps: SaveDeps) {
@@ -38,11 +49,21 @@ export function createSaveHandler(deps: SaveDeps) {
       );
     }
 
-    const content = typeof args["content"] === "string" ? args["content"] : "";
-    const titleArg = typeof args["title"] === "string" ? args["title"] : undefined;
-    const { type: _type, content: _content, title: _title, ...frontmatter } = args;
+    const schema = deps.saveSchemas[type];
+    if (!schema) {
+      return errorResult(`no save schema declared for type "${type}"`);
+    }
+    const parsed = schema.safeParse(args);
+    if (!parsed.success) {
+      return errorResult(formatZodError(parsed.error), { issues: toSaveIssues(parsed.error) });
+    }
 
-    const title = deriveTitle(content, titleArg !== undefined ? { title: titleArg } : {}, "untitled.md");
+    const { type: _type, content: rawContent, title: titleArg, ...frontmatter } =
+      parsed.data as Record<string, unknown>;
+    const content = typeof rawContent === "string" ? rawContent : "";
+    const titleValue = typeof titleArg === "string" ? titleArg : undefined;
+
+    const title = deriveTitle(content, titleValue !== undefined ? { title: titleValue } : {}, "untitled.md");
     const notePath = resolvePath(def.folder, def.naming, frontmatter, title);
 
     // A naming template that doesn't fully disambiguate (no template at
@@ -130,6 +151,25 @@ function resolvePath(
   });
   const normalizedFolder = folder.endsWith("/") ? folder : `${folder}/`;
   return `${normalizedFolder}${fileName}`;
+}
+
+function formatZodError(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => `${issue.path.length > 0 ? issue.path.join(".") : "(root)"}: ${issue.message}`)
+    .join("; ");
+}
+
+/**
+ * Normalizes zod issues to the same `{ field, message }` shape
+ * save-pipeline's `ValidationIssue[]` already exposes (rules/validate.ts),
+ * so callers see one consistent issues contract regardless of which
+ * validation layer caught the problem.
+ */
+function toSaveIssues(error: z.ZodError): Array<{ field?: string; message: string }> {
+  return error.issues.map((issue) => ({
+    ...(issue.path.length > 0 ? { field: issue.path.join(".") } : {}),
+    message: issue.message,
+  }));
 }
 
 function slugify(text: string): string {
