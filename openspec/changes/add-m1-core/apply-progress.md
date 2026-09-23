@@ -476,12 +476,92 @@ The reviewer's three advisory findings (all non-blocking, per the closure: separ
 
 These are recorded here precisely so they cannot be lost the way the NEW-3..NEW-6 finding texts were (lost with the prior agent's session context); they are candidates for a follow-up batch alongside any rediscovered findings, NOT blockers for PR-2.
 
+## PR-3 slice 1 (Phase 3, tasks 3.1–3.7) — pure/bounded sync modules
+
+Branch `add-m1-core/pr3-sync-engine` (stacked on PR-2 tip `587ee91`), under the resolved
+auto-chain / stacked-to-main delivery. This slice is the first work-unit slice of PR-3:
+the seven pure/bounded sync modules. The engine, scheduler, resolve flow, CLI commands,
+wiring, and phase gate (3.8–3.14) are the LATER slices of the same chain and were
+**not** implemented or stubbed here.
+
+### Commits (one Conventional Commit work unit per task; tests alongside behavior)
+
+| Task | Module | Commit | Subject |
+|---|---|---|---|
+| 3.1 | `src/sync/secrets.ts` | `b89982a` | feat(sync): add the high-precision secrets lint pattern set |
+| 3.2 | `src/sync/commit-message.ts` (+ absorbs 2.14's parser; `mcp/tools/changes-since.ts` re-points) | `d9627c6` | feat(sync): derive note commits from frontmatter, unify the grammar |
+| 3.3 | `src/sync/git.ts` | `484aeeb` | feat(sync): add the typed thin git wrapper |
+| 3.4 | `src/sync/lock.ts` (+ `test/helpers/memory-lock-registry.ts`) | `3432cf4` | feat(sync): add the pidfile sync lock with stale reclaim |
+| 3.5 | `src/sync/ladder.ts` | `7da706e` | feat(sync): add the pure conflict-ladder classification and union normalizer |
+| 3.6 | `src/sync/conflict-note.ts` (+ `conflictNoteCommitHeader` into `commit-message.ts`) | `eef5052` | feat(sync): write and read conflict notes with secrets lint |
+| 3.7 | `src/sync/state.ts` (+ `mcp/tools/status.ts` delegates `computeStaleNotes`) | `a00f523` | feat(sync): add the engine state snapshot tracker |
+
+### TDD Cycle Evidence (strict TDD, `vitest run`)
+
+Every task ran RED → GREEN → TRIANGULATE; no production code was written before its
+failing test existed. Fixture bugs found mid-cycle were fixed in the TEST (the spec
+intent was preserved), never by bending the test to the implementation.
+
+| Task | RED evidence | GREEN | TRIANGULATE / mid-cycle findings |
+|---|---|---|---|
+| 3.1 | `test/sync/secrets.test.ts` — "no tests" (module missing, import fails) | 28/28 | 8 positive patterns + 11 high-precision negatives (public-key blocks pass, `password=`/entropy shapes excluded by design); masked previews; sorted multi-match lines. Test-fixture bugs fixed: Google-key constant was 32 chars (needs exactly 35), wrong expected line array |
+| 3.2 | `test/sync/commit-message.test.ts` — module missing | 17/17 (+ changes-since behavioral 2/2) | Title priority via shared `deriveTitle`; id-less types; trailer omission; byte-identical repeat derivation; derive→parse round-trip (incl. status transition decomposition); non-grammar headers → undefined. Test expectation fixed: slug title-casing ("SPEC A Some File") |
+| 3.3 | `test/sync/git.test.ts` — module missing | 11/11 | Real repos: autostash survival, same-region conflict abort (HEAD intact, markers gone), continue-after-resolve (replayed on top), author/trailers via `git log --format=%(trailers)`; injected fake pins exact `pull`/`push` args incl. never-force. **Production fix from a hanging test**: `rebase --continue` blocks forever on git's default editor in a tty-less process — the wrapper now pins `GIT_EDITOR=true` (default instance enables only `unsafe.allowUnsafeEditor`). Push moved to raw plumbing so never-force is directly assertable |
+| 3.4 | `test/sync/lock.test.ts` — module missing | 13/13 | The four named MemoryLockRegistry scenarios (single-owner, second-actor refusal over a SHARED registry, stale reclaim-after-rewrite, release-reacquire) + same-pid re-acquire, idempotent release, `currentHolder`, real-pidfile shape/delete, corrupted-pidfile reclaim, ESRCH/EPERM branches. Test bugs fixed: refusal test originally used two registries; corrupted-pidfile test needed the cache dir created |
+| 3.5 | `test/sync/ladder.test.ts` — module missing | 17/17 | Classification table (generated/union/curated/defaults/policy precedence); routing (all-generated, all-union, mixed-auto, ANY-curated aborts whole rebase, empty); union marker-strip local-first; normalizer (sort, dedupe first-wins, stable ties, undated last, idempotent, entry-free passthrough) |
+| 3.6 | `test/sync/conflict-note.test.ts` — module + `conflictNoteCommitHeader` export missing | 9/9 | Name sanitization; frontmatter contract; secret-blocked write touches nothing on disk; resolved-status readback; malformed skipped. **Production bug found during GREEN**: gray-matter parses unquoted ISO `detected_at` as `Date` — reader now normalizes, or every real round-trip would skip its own notes |
+| 3.7 | `test/sync/state.test.ts` — module missing | 6/6 (+ status/sync/server regression suites) | Idle snapshot shape; staleness table (stale/fresh/absent/unparseable, path-sorted); mutation+clear lifecycle; `setRules` swaps formatVersion + staleness field on the next snapshot. `computeStaleNotes` moved into `sync/state.ts`; the P2 stub delegates with zero behavior change (its pre-existing tests untouched, green) |
+
+### Verification
+
+- `npm test` — **414/414 across 48 files** (was 345/345 at 587ee91 baseline; +69 tests this slice).
+- `npm run typecheck` — clean. `npm run build` — clean (`dist/` produced).
+- Hermetic throughout: no network, no HOME writes; lock/ladder/commit-message tests use the named fakes/injections; git tests use `createTestVault`/`createDivergentClones` tmp repos.
+- Working tree clean; every work-unit commit landed green.
+
+### Deviations from design / disclosures (all additive, none change spec surface)
+
+1. **`deriveCommitMessage` takes an input object**, not the task's literal positional
+   `(op, type, frontmatter, prevFrontmatter?)`: title derivation needs body+fileName and
+   id derivation needs the type def — the design's own §4.3 names `notes/parse.ts` as the
+   shared resolver, which requires those inputs. Semantics are exactly design §4.3.
+2. **2.14 parser absorption**: `parseNoteCommitHeader` + types moved to
+   `src/sync/commit-message.ts` (now also decomposing `statusTransition`);
+   `changes-since.ts` imports the shared grammar (mcp→sync is a design-§1.3-sanctioned
+   edge) and re-exports `NoteCommitOp`; its parser unit tests moved to the grammar's
+   test file. No behavioral change (its git-log tests untouched, green).
+3. **`chore(conflict)` header** lives in `commit-message.ts` (`conflictNoteCommitHeader`),
+   added in 3.6's work unit — commit grammar has one home (design §3 ownership table).
+4. **Session-log entry format is this slice's contract**: RFC/design say "sorted by
+   timestamp, dedupe by entry id" but define no literal format; `normalizeSessionLog`
+   pins v1 as `- <timestamp> | <entry-id> | <text>` (documented in the module). Engine
+   (3.8) and future templates follow it.
+5. **Lock second-actor semantics**: refusal is only for a *live other pid*; same-pid
+   re-acquire rewrites (documented + tested). Corrupted pidfiles are treated as stale
+   (reclaimable). `currentHolder()` added so the M1 "report, don't delegate" path can
+   name the owner.
+6. **`status.ts` cleanup while touched** (3.7): private `toResult` takes the real
+   `EngineStateStub` interface and spreads instead of casting (was a bare `object`
+   param). No behavior change; its tests green.
+7. **Ladder `byCategory` includes non-driving categories on curated-abort** (for the
+   report) — the design's `LadderDecision { category, paths, action }` sketch was
+   per-category; routing is whole-rebase, so the decision carries all three buckets
+   plus `curatedPaths`.
+
+### Remaining in PR-3 (later slices, untouched here)
+
+Tasks 3.8–3.14: engine (`runCycle` + rules hooks), scheduler, resolve flow, CLI
+`sync`/`resolve` commands, wiring (real `SyncPort`/`IndexPort`, engine-backed
+`sync`/`status` tools), and the P3 phase gate (headline never-delete test). The
+modules landed here are exactly their dependencies — nothing further was stubbed.
+
 ## Remaining tasks
 
-- Phase 3 (3.1–3.14): sync engine + commit grammar + conflict ladder + secrets lint + resolve — PR-3, separate apply run. This also absorbs 2.14's local commit-header parser into `src/sync/commit-message.ts` (3.2) and wires the real `SyncPort`/`IndexPort` into `save-pipeline.ts`/`server.ts` (3.13), replacing the P2 null/stub seams.
+- Phase 3 slice 2+ (3.8–3.14): sync engine (`runCycle` + pre-pull/post-sync rules hooks), scheduler, resolve flow, CLI `sync`/`resolve`, wiring (real `SyncPort`/`IndexPort`, engine-backed `sync`/`status` tools), and the P3 phase gate — next apply run on `add-m1-core/pr3-sync-engine`. Tasks 3.1–3.7 (the pure/bounded modules they depend on) landed in PR-3 slice 1 above, including the 2.14 parser absorption (3.2).
 
 ## Workload / PR boundary
 
 - PR-1 = Phase 0 + Phase 1 on `add-m1-core/pr1-scaffold-rules-boot`, base `main`. Estimated ~1,850 lines (forecast) — over the 400-line budget by design; authorized by the resolved chained delivery (stacked-to-main), not a size:exception.
 - PR-2 (now complete, tasks 2.1–2.18, plus a 10-finding remediation batch) = the in-memory index + notes layer + MCP layer on `add-m1-core/pr2-index-notes`, stacked on PR-1. Forecast was ~1,650 lines; actual is larger (19 files/~1,970 lines for 2.1–2.8 alone, per the orchestrator's independent count, plus the 2.9–2.18 batch and the remediation batch on top) — still authorized under the same chained-delivery decision (stacked-to-main), not a size:exception. PR-2 is feature-complete per its own phase gate (2.18) and has cleared its first fresh-context pre-PR review (2 CRITICAL + 8 follow-up findings, all fixed); only Phase 3 remains before the full M1 scope is done.
+- **PR-3** = Phase 3 on `add-m1-core/pr3-sync-engine`, stacked on PR-2 tip `587ee91`, under the same resolved chained delivery (auto-chain / stacked-to-main). **Slice 1 (tasks 3.1–3.7, this run)**: 19 files, +2,573/−113 (~2,686 changed lines) across 7 work-unit commits — over the 400-line budget by design, authorized by the resolved chain, not a size:exception. Slice 2 (3.8–3.10: engine, scheduler, resolve) and slice 3 (3.11–3.14: CLI, wiring, gate) follow in the same chain before PR-3 is reviewable as a whole.
 - No push, no PR creation, no npm publish (user-owned) — this agent never pushes or opens PRs; the orchestrator handles both.
