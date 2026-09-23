@@ -455,10 +455,12 @@ not solved in P2).
 | # | Severity | Finding | Commit | Fix |
 |---|---|---|---|---|
 | NEW-1 | CRITICAL | `upsert.ts`/`save.ts`: editing a spec's title wrote the new file, `save` reported success with the original id, but `putNote` rejected the reindex (the id still belonged to the old path) — the write was permanently invisible to `find`/`read_with_context`, and a restart would only index the stale file | this commit | Implemented the move-semantics decision above end to end: `save.ts` looks up the incoming id in the index before resolving the new path and supplies `previousPath` when it differs; `save-pipeline.ts` performs the atomic move; `upsertNote`/`reparseFiles` now propagate `putNote`'s result instead of discarding it (`Promise<void>` → `Promise<PutNoteResult>` / `Promise<PutNoteResult[]>`), so a genuine (non-move) id collision reaching the normal write path now fails the save loudly instead of reporting false success. |
+| NEW-2 | —* | `buildIndex` silently dropped notes `putNote` rejected on a same-id-different-path collision (e.g. a pull landing a duplicate): first file won deterministically, but the caller was never told a second note existed unindexed | this commit | `buildIndex` takes an optional `onConflict` callback receiving `{ type, id, acceptedPath, rejectedPath }` per collision (optional, backward compatible — no callback, identical behavior); `PutNoteResult` tightened to a discriminated union so `conflictingPath` is a guaranteed string on rejection |
 
-*(Remaining findings NEW-2 through NEW-6 and the nit are being implemented next in this
-same batch; this table and the TDD evidence below are updated as each lands — see the
-commits list for the authoritative, complete record.)*
+*(NEW-2 is the second fix of this batch. The findings texts and severity labels for
+NEW-3 through NEW-6 and the nit were lost with the prior agent's session context; they
+will be rediscovered by a fresh review run over the remediation batch rather than
+reconstructed from memory. \* severity labels lost — see note.)*
 
 ## Remaining tasks
 

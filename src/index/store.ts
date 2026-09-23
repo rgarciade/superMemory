@@ -26,11 +26,12 @@ export function createStore(): IndexStore {
   };
 }
 
-export interface PutNoteResult {
-  ok: boolean;
-  /** Set when `ok` is false: the path currently owning the conflicting id. */
-  conflictingPath?: string;
-}
+/**
+ * Discriminated (second re-review, NEW-2): `conflictingPath` is guaranteed
+ * on rejection — callers surfacing or reporting the collision never have to
+ * handle a missing path.
+ */
+export type PutNoteResult = { ok: true } | { ok: false; conflictingPath: string };
 
 /**
  * Inserts or replaces a note (keyed by path — a re-put at the same path is

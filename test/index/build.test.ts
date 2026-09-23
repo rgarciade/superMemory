@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { buildIndex, buildIndexedNote, parseNoteAt, resolveNoteType } from "../../src/index/build.js";
@@ -133,7 +133,7 @@ describe("buildIndex", () => {
     }
   });
 
-  it("does not corrupt the index when two files declare the same id (e.g. a pull landing a duplicate) — first file wins deterministically, no crash", async () => {
+  it("does not corrupt the index when two files declare the same id (e.g. a pull landing a duplicate) — first file wins deterministically, no crash, AND the conflict is surfaced (second re-review, NEW-2)", async () => {
     const vault = await createTestVault({
       seedNotes: [
         { path: "decisions/DEC-1-a.md", content: DECISION_NOTE },
@@ -145,7 +145,8 @@ describe("buildIndex", () => {
     });
     try {
       const rules = await loadRules(vault.root);
-      const store = await buildIndex(vault.root, rules);
+      const conflicts: Array<{ type: string; id: string; acceptedPath: string; rejectedPath: string }> = [];
+      const store = await buildIndex(vault.root, rules, (conflict) => conflicts.push(conflict));
 
       // Deterministic: listMarkdownFiles sorts paths, so "a.md" is parsed
       // first and wins the id slot; "b.md" is rejected by putNote, never
@@ -155,6 +156,45 @@ describe("buildIndex", () => {
       expect(store.byId.get("DEC-1")?.title).toBe("Use an in-memory index");
       expect(store.byPath.has("decisions/DEC-1-a.md")).toBe(true);
       expect(store.byPath.has("decisions/DEC-1-b.md")).toBe(false);
+
+      // NOT silently dropped: the caller is told exactly what happened.
+      expect(conflicts).toEqual([
+        {
+          type: "decision",
+          id: "DEC-1",
+          acceptedPath: "decisions/DEC-1-a.md",
+          rejectedPath: "decisions/DEC-1-b.md",
+        },
+      ]);
+    } finally {
+      await vault.cleanup();
+    }
+  });
+
+  it("does not call onConflict when there is nothing to report", async () => {
+    const vault = await createTestVault({
+      seedNotes: [{ path: "decisions/DEC-1-a.md", content: DECISION_NOTE }],
+    });
+    try {
+      const rules = await loadRules(vault.root);
+      const onConflict = vi.fn();
+      await buildIndex(vault.root, rules, onConflict);
+      expect(onConflict).not.toHaveBeenCalled();
+    } finally {
+      await vault.cleanup();
+    }
+  });
+
+  it("works without an onConflict callback at all (optional, backward compatible)", async () => {
+    const vault = await createTestVault({
+      seedNotes: [
+        { path: "decisions/DEC-1-a.md", content: DECISION_NOTE },
+        { path: "decisions/DEC-1-b.md", content: DECISION_NOTE },
+      ],
+    });
+    try {
+      const rules = await loadRules(vault.root);
+      await expect(buildIndex(vault.root, rules)).resolves.toBeDefined();
     } finally {
       await vault.cleanup();
     }

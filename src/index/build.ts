@@ -6,16 +6,36 @@ import { createStore, extractWikilinks, putNote, type IndexStore } from "./store
 import type { IndexedNote } from "./types.js";
 
 /**
+ * A same-id-different-path collision surfaced during a build (second
+ * re-review, NEW-2): the walk is sorted, so the first file wins the id
+ * slot deterministically and the second stays unindexed. `acceptedPath`
+ * is the path that owns the id; `rejectedPath` is the path whose note was
+ * rejected by the store.
+ */
+export interface IndexConflict {
+  type: string;
+  id: string;
+  acceptedPath: string;
+  rejectedPath: string;
+}
+
+/**
  * Vault walk + gray-matter parse into a populated in-memory store (design
  * OD-5, index spec: "built in memory at startup by walking the vault").
  * Only the folders declared per note type in rules.md are walked —
  * conflict notes, `.memory/` internals, and generated `index/` maps are
  * never treated as notes.
+ *
+ * Same-id-different-path collisions (e.g. a pull landing a duplicate) are
+ * never silently dropped: when `onConflict` is given, each collision is
+ * surfaced through it. First file in the sorted walk wins
+ * deterministically; the second stays unindexed. `onConflict` is
+ * optional — without it behavior is unchanged (backward compatible).
  */
-
 export async function buildIndex(
   vaultPath: string,
   rules: RulesModel,
+  onConflict?: (conflict: IndexConflict) => void,
 ): Promise<IndexStore> {
   const store = createStore();
   for (const [type, def] of Object.entries(rules.noteTypes)) {
@@ -23,7 +43,15 @@ export async function buildIndex(
     const relPaths = await listMarkdownFiles(vaultPath, folderAbs);
     for (const relPath of relPaths) {
       const note = await parseNoteAt(vaultPath, relPath, type, def);
-      putNote(store, note);
+      const result = putNote(store, note);
+      if (!result.ok && onConflict) {
+        onConflict({
+          type,
+          id: note.id,
+          acceptedPath: result.conflictingPath,
+          rejectedPath: relPath,
+        });
+      }
     }
   }
   return store;
