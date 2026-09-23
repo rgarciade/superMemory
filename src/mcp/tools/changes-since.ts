@@ -74,6 +74,12 @@ export function createChangesSinceHandler(
 ) {
   return async (args: ChangesSinceArgs): Promise<CallToolResult> => {
     const since = new Date(args.since);
+    if (Number.isNaN(since.getTime())) {
+      // `new Date("garbage")` is a truthy Invalid Date — every comparison
+      // against it is false, silently misclassifying every commit rather
+      // than raising an actionable error (fresh-context review finding 9).
+      return errorResult(`invalid "since" timestamp "${args.since}" — expected an ISO date string`);
+    }
     const git = gitFactory(deps.vaultPath);
     const log = await git.log();
 
@@ -110,5 +116,13 @@ function toResult(payload: Record<string, unknown>): CallToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
     structuredContent: payload,
+  };
+}
+
+function errorResult(message: string): CallToolResult {
+  return {
+    content: [{ type: "text", text: message }],
+    structuredContent: { error: message },
+    isError: true,
   };
 }

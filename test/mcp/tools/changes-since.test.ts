@@ -114,4 +114,38 @@ describe("changes_since (in-memory transport)", () => {
       await vault.cleanup();
     }
   });
+
+  // Fresh-context review finding 9: `new Date("garbage")` is a truthy
+  // Invalid Date, so an unparseable "since" timestamp was silently
+  // misinterpreted (every comparison against it is false) instead of
+  // raising an actionable error.
+  it("rejects an unparseable since timestamp with an actionable error", async () => {
+    const vault = await createTestVault();
+    try {
+      const rules = await loadRules();
+      const catalog = buildCatalog(rules);
+      const def = catalog.tools.find((t) => t.name === "changes_since");
+      if (!def) throw new Error("catalog must declare changes_since");
+
+      const { client, close } = await createToolTestClient([
+        {
+          name: def.name,
+          description: def.description,
+          inputSchema: def.inputSchema,
+          handler: createChangesSinceHandler({ vaultPath: vault.root }) as never,
+        },
+      ]);
+      try {
+        const result = await client.callTool({
+          name: "changes_since",
+          arguments: { since: "not-a-timestamp" },
+        });
+        expect(result.isError).toBe(true);
+      } finally {
+        await close();
+      }
+    } finally {
+      await vault.cleanup();
+    }
+  });
 });

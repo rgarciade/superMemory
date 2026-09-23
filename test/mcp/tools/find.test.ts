@@ -89,6 +89,37 @@ describe("find (in-memory transport)", () => {
     }
   });
 
+  // Fresh-context review finding 9: `new Date("garbage")` is a truthy
+  // Invalid Date, so an unparseable date filter was silently ignored
+  // instead of raising an actionable error.
+  it("rejects an unparseable date_from with an actionable error instead of silently ignoring it", async () => {
+    const store = createStore();
+    putNote(store, note({ id: "SPEC-a", path: "specs/a.md", frontmatter: { review_after: "2026-06-01" } }));
+
+    const rules = await loadRules();
+    const catalog = buildCatalog(rules);
+    const findDef = catalog.tools.find((t) => t.name === "find");
+    if (!findDef) throw new Error("catalog must declare find");
+
+    const { client, close } = await createToolTestClient([
+      {
+        name: findDef.name,
+        description: findDef.description,
+        inputSchema: findDef.inputSchema,
+        handler: createFindHandler({ store }) as never,
+      },
+    ]);
+    try {
+      const result = await client.callTool({
+        name: "find",
+        arguments: { date_field: "review_after", date_from: "not-a-date" },
+      });
+      expect(result.isError).toBe(true);
+    } finally {
+      await close();
+    }
+  });
+
   it("declares no project argument on the wire schema", async () => {
     const rules = await loadRules();
     const catalog = buildCatalog(rules);
