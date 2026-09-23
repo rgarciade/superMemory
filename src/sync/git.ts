@@ -52,6 +52,12 @@ export interface GitClient {
   push(remote?: string, branch?: string): Promise<void>;
   /** Content of `path` as of `ref` — e.g. `git show HEAD:<path>` for deletion derivation. */
   showFile(ref: string, relPath: string): Promise<string>;
+  /** Resolves a ref to a sha (default HEAD) — the engine's pull-diff bookkeeping. */
+  revParse(ref?: string): Promise<string>;
+  /** Paths changed between two refs — the pull's changed files for IndexPort.reparse. */
+  diffNames(fromRef: string, toRef: string): Promise<string[]>;
+  /** `git checkout --theirs <paths>` — the ladder's generated-file resolution. */
+  checkoutTheirs(paths: string[]): Promise<void>;
   /** Creates a branch at `ref` (default HEAD) — the ladder's snapshot branches. */
   createBranch(name: string, ref?: string): Promise<void>;
   rebaseAbort(): Promise<void>;
@@ -115,6 +121,24 @@ export function createGitClient(
 
     async showFile(ref: string, relPath: string): Promise<string> {
       return git.raw(["show", `${ref}:${relPath}`]);
+    },
+
+    async revParse(ref = "HEAD"): Promise<string> {
+      const out = await git.raw(["rev-parse", ref]);
+      return out.trim();
+    },
+
+    async diffNames(fromRef: string, toRef: string): Promise<string[]> {
+      const out = await git.raw(["diff", "--name-only", fromRef, toRef]);
+      return out
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line !== "");
+    },
+
+    async checkoutTheirs(paths: string[]): Promise<void> {
+      if (paths.length === 0) return;
+      await git.raw(["checkout", "--theirs", ...paths]);
     },
 
     async createBranch(name: string, ref?: string): Promise<void> {

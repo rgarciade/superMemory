@@ -38,6 +38,11 @@ export interface LockHandle {
 export interface SyncLock {
   /** `null` = held by a live other actor (report, never race). */
   acquire(owner: LockOwner): Promise<LockHandle | null>;
+  /**
+   * Current holder for the ownership report (M1: report, don't delegate).
+   * Optional — a lock implementation without readable storage omits it.
+   */
+  currentHolder?(): Promise<LockRecord | null>;
 }
 
 /** The persistence seam: pidfile in production, MemoryLockRegistry in tests. */
