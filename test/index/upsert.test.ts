@@ -99,6 +99,54 @@ describe("upsertNote", () => {
     }
   });
 
+  // Second re-review, NEW-1: upsertNote previously ignored putNote's
+  // rejection entirely, silently reporting success while the file was
+  // never actually indexed. It must now propagate the rejection so the
+  // caller can fail loudly instead of lying about success.
+  it("propagates putNote's rejection instead of silently succeeding when a genuine id collision reaches it (e.g. a pull landing a duplicate)", async () => {
+    const vault = await createTestVault({
+      seedNotes: [{ path: "specs/SPEC-search-spec.md", content: SPEC_NOTE }],
+    });
+    try {
+      const rules = await loadRules(vault.root);
+      const store = await buildIndex(vault.root, rules);
+      const original = store.byId.get("SPEC-search");
+      expect(original?.path).toBe("specs/SPEC-search-spec.md");
+
+      // A second file lands (e.g. via a pull) declaring the SAME spec_id
+      // at a genuinely different path — not a move, a true duplicate.
+      await vault.write("specs/SPEC-search-spec-duplicate.md", SPEC_NOTE);
+      const result = await upsertNote(
+        store,
+        vault.root,
+        "specs/SPEC-search-spec-duplicate.md",
+        rules,
+      );
+
+      expect(result).toEqual({ ok: false, conflictingPath: "specs/SPEC-search-spec.md" });
+      // The original stays exactly as it was — no corruption.
+      expect(store.byId.get("SPEC-search")).toBe(original);
+      expect(store.byPath.has("specs/SPEC-search-spec-duplicate.md")).toBe(false);
+    } finally {
+      await vault.cleanup();
+    }
+  });
+
+  it("returns { ok: true } for a normal, successful upsert", async () => {
+    const vault = await createTestVault({
+      seedNotes: [{ path: "specs/SPEC-search-spec.md", content: SPEC_NOTE }],
+    });
+    try {
+      const rules = await loadRules(vault.root);
+      const store = await buildIndex(vault.root, rules);
+      await vault.write("decisions/DEC-1-index.md", DECISION_NOTE);
+      const result = await upsertNote(store, vault.root, "decisions/DEC-1-index.md", rules);
+      expect(result).toEqual({ ok: true });
+    } finally {
+      await vault.cleanup();
+    }
+  });
+
   it("is a no-op for a path outside every declared note-type folder", async () => {
     const vault = await createTestVault({
       seedNotes: [{ path: "specs/SPEC-search-spec.md", content: SPEC_NOTE }],

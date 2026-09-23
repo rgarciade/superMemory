@@ -1,8 +1,9 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import matter from "gray-matter";
+import { buildIndexedNote } from "../index/build.js";
 import { getNoteById } from "../index/queries.js";
-import type { IndexStore } from "../index/store.js";
+import { moveNote, type IndexStore } from "../index/store.js";
 import { upsertNote } from "../index/upsert.js";
 import type { Clock } from "../util/clock.js";
 import { validateNote, type ValidationIssue } from "../rules/validate.js";
@@ -59,6 +60,16 @@ export interface SaveNoteInput {
   content?: string;
   /** Provenance for the write event (e.g. "mcp:claude", "cli"). */
   via: string;
+  /**
+   * The note's current vault-relative path, when it differs from `path`
+   * (design decision, second re-review: a note's identity is its id — an
+   * update whose derived path changed, e.g. a title change on a
+   * `{id}-{slug}.md` type, is a MOVE, not two separate notes). When set
+   * and different from `path`, `saveNote` writes the new file, deletes
+   * the old one, and atomically swaps the index entry. Equal to `path`
+   * (or omitted) is an ordinary create/update at the same location.
+   */
+  previousPath?: string;
 }
 
 export type SaveNoteResult =
@@ -107,10 +118,66 @@ export async function saveNote(
     await deps.syncPort.pullLatest(input.path);
   }
 
-  await writeNoteFile(fileAbs, frontmatter, body);
-  await upsertNote(deps.store, input.vaultPath, input.path, input.rules);
-
   const noteTypeDef = input.rules.noteTypes[input.type];
+  if (!noteTypeDef) {
+    // Unreachable in practice: validateNote already rejected an unknown
+    // type above. Guarded for type safety, not a real code path.
+    return { ok: false, issues: [{ kind: "field", message: `unknown note type "${input.type}"` }] };
+  }
+
+  await writeNoteFile(fileAbs, frontmatter, body);
+
+  if (input.previousPath !== undefined && input.previousPath !== input.path) {
+    // MOVE (design decision, second re-review — recorded in
+    // apply-progress.md): a note's identity is its id, so an update
+    // whose derived path changed (e.g. a title change on a
+    // `{id}-{slug}.md` type) deletes the old file and atomically swaps
+    // the index entry — removeNote(oldPath) then putNote(new), no
+    // `await` between them, built synchronously from the
+    // already-in-memory frontmatter/body (no disk re-read, which would
+    // reintroduce a yield point). The store is never observed with both
+    // paths indexed, or neither.
+    const previousPath = input.previousPath;
+    await rm(path.join(input.vaultPath, previousPath), { force: true });
+    const newNote = buildIndexedNote(input.type, input.path, frontmatter, body, noteTypeDef);
+    const moveResult = moveNote(deps.store, previousPath, newNote);
+    if (!moveResult.ok) {
+      // NEW-1: fail loudly instead of reporting success while the write
+      // is unindexed — the file is on disk, but the caller must know
+      // the index could not be updated (an id genuinely still owned by
+      // a third, unrelated path).
+      return {
+        ok: false,
+        issues: [
+          {
+            kind: "field",
+            message:
+              `save wrote "${input.path}" but could not update the index: the id is ` +
+              `still owned by "${moveResult.conflictingPath}"`,
+          },
+        ],
+      };
+    }
+  } else {
+    const upsertResult = await upsertNote(deps.store, input.vaultPath, input.path, input.rules);
+    if (!upsertResult.ok) {
+      // NEW-1: same "fail loudly" guarantee for the non-move path — a
+      // genuine id collision (e.g. a duplicate id already present from a
+      // pull) must not be reported as a successful save.
+      return {
+        ok: false,
+        issues: [
+          {
+            kind: "field",
+            message:
+              `save wrote "${input.path}" but could not update the index: the id is ` +
+              `already owned by "${upsertResult.conflictingPath}"`,
+          },
+        ],
+      };
+    }
+  }
+
   const id = deriveNoteId(input.type, frontmatter, noteTypeDef);
 
   await maintainLinkedKnowledgeIfNeeded(deps, input, frontmatter, {

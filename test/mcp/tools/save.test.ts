@@ -293,4 +293,56 @@ describe("save (in-memory transport)", () => {
       await vault.cleanup();
     }
   });
+
+  it("moves the note when an update changes its derived path (e.g. a title change) — never lost, never duplicated (fresh-context review NEW-1)", async () => {
+    const { vault, store, client, close } = await setup();
+    try {
+      const created = await client.callTool({
+        name: "save",
+        arguments: {
+          type: "spec",
+          spec_id: "SPEC-rename",
+          status: "draft",
+          owner: "Raul",
+          title: "Alpha title",
+          content: "# Alpha title\n\nOriginal body.\n",
+        },
+      });
+      expect(created.isError).toBeFalsy();
+      const createdPayload = created.structuredContent as { path: string; id: string };
+      expect(createdPayload.id).toBe("SPEC-rename");
+
+      // Same id, different title -> a different derived path (naming:
+      // "{spec_id}-{slug}.md").
+      const moved = await client.callTool({
+        name: "save",
+        arguments: {
+          type: "spec",
+          spec_id: "SPEC-rename",
+          status: "active",
+          owner: "Raul",
+          title: "Beta title",
+          content: "# Beta title\n\nUpdated body.\n",
+        },
+      });
+      expect(moved.isError).toBeFalsy();
+      const movedPayload = moved.structuredContent as { path: string; id: string };
+      expect(movedPayload.id).toBe("SPEC-rename");
+      expect(movedPayload.path).not.toBe(createdPayload.path);
+
+      // New content is on disk at the new path.
+      const onDisk = await readFile(path.join(vault.root, movedPayload.path), "utf8");
+      expect(onDisk).toContain("Beta title");
+
+      // Old file is gone — never orphaned, never both.
+      await expect(readFile(path.join(vault.root, createdPayload.path), "utf8")).rejects.toThrow();
+
+      // Immediately visible under the new path, not the old one — never neither.
+      expect(store.byId.get("SPEC-rename")?.path).toBe(movedPayload.path);
+      expect(store.byPath.has(createdPayload.path)).toBe(false);
+    } finally {
+      await close();
+      await vault.cleanup();
+    }
+  });
 });

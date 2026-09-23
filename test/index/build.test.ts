@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { buildIndex, parseNoteAt, resolveNoteType } from "../../src/index/build.js";
+import { buildIndex, buildIndexedNote, parseNoteAt, resolveNoteType } from "../../src/index/build.js";
 import { parseRules } from "../../src/rules/parser.js";
 import type { RulesModel } from "../../src/rules/types.js";
 import { createTestVault } from "../helpers/create-test-vault.js";
@@ -211,6 +211,35 @@ describe("parseNoteAt", () => {
       expect(note.id).toBe("SPEC-search");
       expect(note.title).toBe("Search spec");
       expect(note.status).toBe("draft");
+    } finally {
+      await vault.cleanup();
+    }
+  });
+});
+
+// Second re-review: buildIndexedNote is the pure core parseNoteAt reads a
+// file then delegates to — extracted so notes/save-pipeline.ts can build
+// an IndexedNote synchronously from already-in-memory content during a
+// move (no disk re-read, no await between removeNote and putNote).
+describe("buildIndexedNote", () => {
+  it("builds the same IndexedNote shape parseNoteAt produces, from already-parsed parts", async () => {
+    const vault = await createTestVault({
+      seedNotes: [{ path: "specs/SPEC-search-spec.md", content: SPEC_NOTE }],
+    });
+    try {
+      const rules = await loadRules(vault.root);
+      const def = rules.noteTypes["spec"];
+      if (!def) throw new Error("fixture rules must declare a spec type");
+
+      const viaFile = await parseNoteAt(vault.root, "specs/SPEC-search-spec.md", "spec", def);
+      const viaPure = buildIndexedNote(
+        "spec",
+        "specs/SPEC-search-spec.md",
+        viaFile.frontmatter,
+        viaFile.body,
+        def,
+      );
+      expect(viaPure).toEqual(viaFile);
     } finally {
       await vault.cleanup();
     }

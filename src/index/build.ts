@@ -52,7 +52,25 @@ export async function parseNoteAt(
   const fileAbs = path.join(vaultPath, relPath);
   const raw = await readFile(fileAbs, "utf8");
   const { frontmatter, body } = parseNoteFile(raw);
-  const fileName = path.basename(fileAbs);
+  return buildIndexedNote(type, relPath, frontmatter, body, def);
+}
+
+/**
+ * The pure core `parseNoteAt` delegates to once it has the file's
+ * frontmatter/body — extracted (second re-review) so
+ * `notes/save-pipeline.ts` can build an `IndexedNote` synchronously from
+ * content it already holds in memory during a move (same id, new path):
+ * no disk re-read, no `await` between `removeNote` and `putNote`, so the
+ * store is never observed with both paths indexed, or neither.
+ */
+export function buildIndexedNote(
+  type: string,
+  relPath: string,
+  frontmatter: Record<string, unknown>,
+  body: string,
+  def: NoteTypeDef,
+): IndexedNote {
+  const fileName = path.basename(relPath);
   const title = deriveTitle(body, frontmatter, fileName);
   const id = deriveNoteId(type, frontmatter, def) ?? relPath;
   const status = frontmatter["status"];

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createStore,
   extractWikilinks,
+  moveNote,
   putNote,
   removeNote,
 } from "../../src/index/store.js";
@@ -176,6 +177,48 @@ describe("removeNote", () => {
     expect(store.byPath.has(impostor.path)).toBe(false);
     expect(store.byId.get("DEC-1")).toBe(owner);
     expect(store.byPath.get("decisions/owner.md")).toBe(owner);
+  });
+});
+
+// Second re-review, design decision: a note's identity is its id. When an
+// update's derived path differs from where the note currently lives
+// (e.g. a title change on a {spec_id}-{slug}.md type), that is a MOVE —
+// removeNote(oldPath) then putNote(new), with no I/O/await between them,
+// so the store is never observed with both paths indexed, or neither.
+// putNote's id-collision guard (finding 2) would otherwise reject the
+// note moving into the id slot it itself used to occupy.
+describe("moveNote", () => {
+  it("moves a note from its old path to a new path under the same id, atomically", () => {
+    const store = createStore();
+    const original = note({ id: "SPEC-a", path: "specs/SPEC-a-alpha.md", title: "Alpha" });
+    putNote(store, original);
+
+    const moved = note({ id: "SPEC-a", path: "specs/SPEC-a-beta.md", title: "Beta" });
+    const result = moveNote(store, "specs/SPEC-a-alpha.md", moved);
+
+    expect(result).toEqual({ ok: true });
+    // Never both: the old path is gone, only the new path remains.
+    expect(store.byPath.has("specs/SPEC-a-alpha.md")).toBe(false);
+    expect(store.byPath.get("specs/SPEC-a-beta.md")).toBe(moved);
+    // Never neither: the id resolves to the moved note, not stale/missing.
+    expect(store.byId.get("SPEC-a")).toBe(moved);
+    expect(store.byId.size).toBe(1);
+    expect(store.byPath.size).toBe(1);
+  });
+
+  it("would still refuse if the id ended up claimed by a genuinely different path in the meantime (defense in depth)", () => {
+    const store = createStore();
+    putNote(store, note({ id: "SPEC-a", path: "specs/old.md" }));
+    // Some other note already claims the id at a THIRD path — not the
+    // one being moved from.
+    putNote(store, note({ id: "SPEC-a", path: "specs/old.md", title: "same path, still SPEC-a" }));
+
+    const moved = note({ id: "SPEC-a", path: "specs/new.md" });
+    // Moving from a path that ISN'T where SPEC-a currently lives must not
+    // silently steal the id out from under the real owner.
+    const result = moveNote(store, "specs/does-not-own-the-id.md", moved);
+    expect(result).toEqual({ ok: false, conflictingPath: "specs/old.md" });
+    expect(store.byId.get("SPEC-a")?.path).toBe("specs/old.md"); // untouched
   });
 });
 

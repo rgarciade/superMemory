@@ -92,6 +92,21 @@ export function removeNote(store: IndexStore, path: string): void {
   }
 }
 
+/**
+ * Atomically moves a note from `oldPath` to `newNote` (design decision,
+ * second re-review: a note's identity is its id — when an update's
+ * derived path differs from where the note currently lives, that is a
+ * MOVE, not two separate notes). Synchronous by construction, no I/O, no
+ * `await` between the two steps: `removeNote` clears the old id
+ * ownership FIRST, so `putNote`'s id-collision guard (finding 2) does
+ * not reject the note moving into the id slot it itself used to occupy.
+ * The store is never observed with both paths indexed, or neither.
+ */
+export function moveNote(store: IndexStore, oldPath: string, newNote: IndexedNote): PutNoteResult {
+  removeNote(store, oldPath);
+  return putNote(store, newNote);
+}
+
 function linkTargetsOf(note: IndexedNote): Set<string> {
   const targets = new Set<string>(note.wikilinks);
   if (note.specId && note.specId !== note.id) targets.add(note.specId);

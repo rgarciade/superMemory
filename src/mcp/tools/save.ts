@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getNoteById } from "../../index/queries.js";
 import type { IndexStore } from "../../index/store.js";
 import { deriveNoteId, deriveTitle, parseNoteFile } from "../../notes/parse.js";
 import { saveNote, type SyncPort } from "../../notes/save-pipeline.js";
@@ -64,6 +65,13 @@ export function createSaveHandler(deps: SaveDeps) {
     const titleValue = typeof titleArg === "string" ? titleArg : undefined;
 
     const incomingId = deriveNoteId(type, frontmatter, def);
+    // A note's identity is its id (design decision, second re-review —
+    // see apply-progress.md): if this id already lives in the index,
+    // look it up BEFORE computing the new path, so a title change (a
+    // different derived path under the same id) is recognized as a MOVE
+    // rather than colliding with — or silently orphaning — itself.
+    const existingNote = incomingId !== undefined ? getNoteById(deps.store, incomingId) : undefined;
+
     const title = deriveTitle(content, titleValue !== undefined ? { title: titleValue } : {}, "untitled.md");
     const resolved = resolvePath(def.folder, def.naming, frontmatter, title, incomingId);
     if ("error" in resolved) return errorResult(resolved.error);
@@ -77,6 +85,9 @@ export function createSaveHandler(deps: SaveDeps) {
     const conflict = await detectPathConflict(deps.vaultPath, notePath, type, def, incomingId);
     if (conflict) return errorResult(conflict, { path: notePath });
 
+    const previousPath =
+      existingNote !== undefined && existingNote.path !== notePath ? existingNote.path : undefined;
+
     const result = await saveNote(
       { store: deps.store, clock: deps.clock, syncPort: deps.syncPort },
       {
@@ -84,6 +95,7 @@ export function createSaveHandler(deps: SaveDeps) {
         rules: deps.rules,
         type,
         path: notePath,
+        ...(previousPath !== undefined ? { previousPath } : {}),
         frontmatter,
         content,
         via: deps.via,

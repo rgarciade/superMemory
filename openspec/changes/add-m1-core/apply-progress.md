@@ -392,6 +392,74 @@ Baseline at the start of this batch: `npm test` 287/287 across 41 files.
   directory just outside the vault root, removed via `rm(..., {recursive:true,force:true})`
   in a `finally` block (finding 8) — nothing repro-related was ever committed.
 
+## PR-2 second remediation batch (post-re-review fixes)
+
+A second fresh-context re-review confirmed all 10 findings from the first batch CLOSED,
+but found the finding-2 fix (`putNote` rejecting id collisions) had introduced a
+regression on the main write path: nothing propagated a rejection, so an update that
+changed a note's derived path (e.g. a title change) wrote the new file successfully,
+reported success, but the index silently kept serving the OLD content forever. Verdict
+BLOCKED on that regression plus 5 new findings (1 CRITICAL, 1 HIGH, 2 MEDIUM, 2 LOW) and
+1 nit. Baseline at the start of this batch: `npm test` 307/307 across 41 files.
+
+### Design decision: what happens when a note's derived path changes?
+
+**A note's identity is its id. Same-id-different-path is a MOVE**, not two separate
+notes and not an id collision. When an update's derived path (folder + naming template
++ title slug) differs from where the note currently lives in the index, `saveNote`:
+
+1. writes the new file at the new path (the write itself is unaffected — always safe
+   to have both files briefly coexist on disk; deleting first would risk data loss if
+   the write then failed),
+2. deletes the old file from disk (`rm(..., {force:true})`),
+3. atomically swaps the index entry: `removeNote(oldPath)` then `putNote(newNote)`,
+   with **no `await` between them** — the two are synchronous `Map` operations, so no
+   other code can observe an intermediate state. The store is **never** observed with
+   both paths indexed, or with neither.
+
+The new `IndexedNote` for step 3 is built **synchronously from content already held in
+memory** during the save (`index/build.ts`'s newly-extracted pure `buildIndexedNote`),
+not re-read from disk via the existing async `upsertNote` — re-reading would reintroduce
+exactly the `await`-shaped gap between `removeNote` and `putNote` that breaks atomicity.
+
+**Why not reject the move instead (require an explicit "confirm move" step)?** The
+`save` tool's wire schema carries no path field at all (design §5.2) — the path is
+always derived from the type's folder/naming/title. A caller has no way to "target
+the old path explicitly" to request a plain in-place update; every save that changes
+a title is, from the caller's perspective, indistinguishable from any other save.
+Refusing every title-changing update would make normal editing (the primary write
+path for spec/decision/incident notes) require a manual delete-then-create dance the
+tool contract doesn't expose — worse than fixing this properly.
+
+**Primitives added, by module (unchanged boundaries — see design §3):**
+- `index/store.ts`: `moveNote(store, oldPath, newNote)` — the synchronous, atomic
+  primitive (`removeNote` then `putNote`, no yield point). Co-located with
+  `putNote`/`removeNote` since it is pure store manipulation, no I/O — matches
+  `store.ts`'s existing "no I/O, explicit inputs" contract.
+- `index/build.ts`: `buildIndexedNote(type, path, frontmatter, body, def)` — the pure
+  core `parseNoteAt` already had, extracted so a caller with already-parsed content
+  (the save pipeline, mid-write) can build an `IndexedNote` without a disk round trip.
+- `notes/save-pipeline.ts`: `SaveNoteInput.previousPath?` — when set and different
+  from `path`, triggers the move; the caller (the `save` MCP tool) is responsible for
+  detecting a move by looking up the incoming id in the index BEFORE computing the new
+  path, and supplying the note's *current* path as `previousPath`.
+
+**Scope boundary, explicitly**: this is the M1/P2 in-memory-index side of a move. It
+does **not** touch git — no rename commit, no `git mv` — that is Phase 3's job (the
+sync engine's commit grammar, `src/sync/commit-message.ts`, already anticipates a
+`note(update)` header; a path rename inside one commit is a natural extension there,
+not solved in P2).
+
+### Findings fixed (this batch)
+
+| # | Severity | Finding | Commit | Fix |
+|---|---|---|---|---|
+| NEW-1 | CRITICAL | `upsert.ts`/`save.ts`: editing a spec's title wrote the new file, `save` reported success with the original id, but `putNote` rejected the reindex (the id still belonged to the old path) — the write was permanently invisible to `find`/`read_with_context`, and a restart would only index the stale file | this commit | Implemented the move-semantics decision above end to end: `save.ts` looks up the incoming id in the index before resolving the new path and supplies `previousPath` when it differs; `save-pipeline.ts` performs the atomic move; `upsertNote`/`reparseFiles` now propagate `putNote`'s result instead of discarding it (`Promise<void>` → `Promise<PutNoteResult>` / `Promise<PutNoteResult[]>`), so a genuine (non-move) id collision reaching the normal write path now fails the save loudly instead of reporting false success. |
+
+*(Remaining findings NEW-2 through NEW-6 and the nit are being implemented next in this
+same batch; this table and the TDD evidence below are updated as each lands — see the
+commits list for the authoritative, complete record.)*
+
 ## Remaining tasks
 
 - Phase 3 (3.1–3.14): sync engine + commit grammar + conflict ladder + secrets lint + resolve — PR-3, separate apply run. This also absorbs 2.14's local commit-header parser into `src/sync/commit-message.ts` (3.2) and wires the real `SyncPort`/`IndexPort` into `save-pipeline.ts`/`server.ts` (3.13), replacing the P2 null/stub seams.

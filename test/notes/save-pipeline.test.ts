@@ -208,6 +208,111 @@ describe("saveNote — Linked Knowledge maintenance", () => {
   });
 });
 
+describe("saveNote — move (same id, different path)", () => {
+  // Second re-review design decision: a note's identity is its id. When
+  // an update's derived path differs from where the note currently
+  // lives (e.g. a title change on a {id}-{slug}.md type), that is a
+  // MOVE: write the new file, delete the old one, and atomically swap
+  // the index entry (removeNote(oldPath) then putNote(new), no await
+  // between them) — never a state where both paths are indexed, or
+  // neither. NEW-1: previously, an update that changed the derived path
+  // wrote the new file successfully but putNote rejected the reindex
+  // (the id still belonged to the old path) — the write was permanently
+  // invisible even though saveNote reported success.
+  const DECISION_NOTE = `---
+decision_id: DEC-1
+spec_id: SPEC-search
+status: proposed
+---
+
+# Use an in-memory index
+`;
+
+  it("moves the note: writes the new path, deletes the old file, and the index reflects only the new path", async () => {
+    const { vault, rules, store } = await setup();
+    try {
+      const syncPort = fakeSyncPort();
+      await saveNote(
+        { store, clock: fixedClock, syncPort },
+        {
+          vaultPath: vault.root,
+          rules,
+          type: "decision",
+          path: "decisions/DEC-1-use-memory-index.md",
+          frontmatter: { decision_id: "DEC-1", spec_id: "SPEC-search", status: "proposed" },
+          content: "# Use an in-memory index\n",
+          via: "test",
+        },
+      );
+      expect(store.byId.get("DEC-1")?.path).toBe("decisions/DEC-1-use-memory-index.md");
+
+      const result = await saveNote(
+        { store, clock: fixedClock, syncPort },
+        {
+          vaultPath: vault.root,
+          rules,
+          type: "decision",
+          path: "decisions/DEC-1-renamed-decision.md",
+          previousPath: "decisions/DEC-1-use-memory-index.md",
+          frontmatter: { decision_id: "DEC-1", spec_id: "SPEC-search", status: "accepted" },
+          content: "# Renamed decision\n",
+          via: "test",
+        },
+      );
+
+      expect(result).toEqual({ ok: true, path: "decisions/DEC-1-renamed-decision.md", id: "DEC-1" });
+
+      // New file exists with the new content.
+      const onDisk = await readFile(
+        path.join(vault.root, "decisions/DEC-1-renamed-decision.md"),
+        "utf8",
+      );
+      expect(onDisk).toContain("Renamed decision");
+
+      // Old file is gone from disk — never silently orphaned.
+      await expect(
+        readFile(path.join(vault.root, "decisions/DEC-1-use-memory-index.md"), "utf8"),
+      ).rejects.toThrow();
+
+      // Index reflects only the new path — never both, never neither.
+      expect(store.byId.get("DEC-1")?.path).toBe("decisions/DEC-1-renamed-decision.md");
+      expect(store.byPath.has("decisions/DEC-1-use-memory-index.md")).toBe(false);
+      expect(store.byPath.has("decisions/DEC-1-renamed-decision.md")).toBe(true);
+
+      // The moved-to note is immediately findable by its (unchanged) id.
+      const found = findNotes(store, { type: "decision" });
+      expect(found.map((n) => n.id)).toEqual(["DEC-1"]);
+      expect(found[0]?.path).toBe("decisions/DEC-1-renamed-decision.md");
+    } finally {
+      await vault.cleanup();
+    }
+  });
+
+  it("does not treat a same-path save as a move (previousPath equal to path is a no-op distinction)", async () => {
+    const { vault, rules, store } = await setup();
+    try {
+      const syncPort = fakeSyncPort();
+      const result = await saveNote(
+        { store, clock: fixedClock, syncPort },
+        {
+          vaultPath: vault.root,
+          rules,
+          type: "decision",
+          path: "decisions/DEC-1-use-memory-index.md",
+          previousPath: "decisions/DEC-1-use-memory-index.md",
+          frontmatter: { decision_id: "DEC-1", spec_id: "SPEC-search", status: "proposed" },
+          content: DECISION_NOTE,
+          via: "test",
+        },
+      );
+      expect(result.ok).toBe(true);
+      expect(store.byId.get("DEC-1")?.path).toBe("decisions/DEC-1-use-memory-index.md");
+    } finally {
+      await vault.cleanup();
+    }
+  });
+});
+
 describe("saveNote — validates before touching the filesystem", () => {
   // Fresh-context review finding 8: mergeNoteContent (access + readFile)
   // ran before validateNote, so a path escaping the type's declared
