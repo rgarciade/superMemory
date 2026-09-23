@@ -115,6 +115,16 @@ export function formatCommitMessage(message: CommitMessage): string {
 }
 
 /**
+ * Conflict-note commit header (design §4.4): the ladder's curated path
+ * commits the conflict note itself, linted, with this exact header.
+ * Lives here — not inline in the engine — because commit grammar has
+ * exactly one home (design §3 ownership table).
+ */
+export function conflictNoteCommitHeader(noteId: string): string {
+  return `chore(conflict): record divergent edits for ${noteId}`;
+}
+
+/**
  * The meaningful-change suffix (design §4.3): appended when a
  * lifecycle-relevant field (canonical: `status`) transitions between
  * the previous and current frontmatter. Body-only edits produce none.
