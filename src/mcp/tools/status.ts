@@ -1,9 +1,10 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { listNotes } from "../../index/queries.js";
 import type { IndexStore } from "../../index/store.js";
-import type { IndexedNote } from "../../index/types.js";
 import type { RulesModel } from "../../rules/types.js";
+import { computeStaleNotes, type StaleNoteRef } from "../../sync/state.js";
 import type { Clock } from "../../util/clock.js";
+
+export type { StaleNoteRef } from "../../sync/state.js";
 
 /**
  * `status` — engine visibility (tool-catalog spec: "sync and status —
@@ -14,20 +15,14 @@ import type { Clock } from "../../util/clock.js";
  * — no schema change when it does. `staleNotes` and `formatVersion` are
  * NOT stubbed: they're genuinely computable today from the index +
  * `rules.lifecycle.staleness` + an injected `Clock` (OD-4), with no
- * engine dependency at all.
+ * engine dependency at all — the computation lives in `sync/state.ts`
+ * (task 3.7) so the stub and the future engine report the same list.
  */
 
 export interface StatusDeps {
   store: IndexStore;
   rules: RulesModel;
   clock: Clock;
-}
-
-export interface StaleNoteRef {
-  id: string;
-  title: string;
-  path: string;
-  type: string;
 }
 
 export interface EngineStateStub {
@@ -61,37 +56,11 @@ export function createStatusHandler(deps: StatusDeps) {
   return (): CallToolResult => toResult(buildEngineStateStub(deps));
 }
 
-function computeStaleNotes(store: IndexStore, rules: RulesModel, clock: Clock): StaleNoteRef[] {
-  const field = rules.lifecycle.staleness?.field;
-  if (!field) return [];
-  const now = clock.now();
-  const stale: StaleNoteRef[] = [];
-  for (const note of listNotes(store)) {
-    if (isStale(note, field, now)) {
-      stale.push({ id: note.id, title: note.title, path: note.path, type: note.type });
-    }
-  }
-  return stale.sort((a, b) => a.path.localeCompare(b.path));
-}
-
-function isStale(note: IndexedNote, field: string, now: Date): boolean {
-  const raw = note.frontmatter[field];
-  const date = toDate(raw);
-  return date !== undefined && date < now;
-}
-
-function toDate(value: unknown): Date | undefined {
-  if (value instanceof Date) return Number.isNaN(value.getTime()) ? undefined : value;
-  if (typeof value === "string") {
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
-  }
-  return undefined;
-}
-
-function toResult(payload: object): CallToolResult {
+function toResult(payload: EngineStateStub): CallToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    structuredContent: payload as Record<string, unknown>,
+    // Spread into a fresh object literal: anonymous shapes carry implicit
+    // index signatures (interfaces don't), so no cast is needed.
+    structuredContent: { ...payload },
   };
 }
