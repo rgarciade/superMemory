@@ -5,6 +5,7 @@ import {
   deriveCommitMessage,
   formatCommitMessage,
   parseNoteCommitHeader,
+  withConflictResolvedSuffix,
 } from "../../src/sync/commit-message.js";
 import { parseRules } from "../../src/rules/parser.js";
 import type { RulesModel } from "../../src/rules/types.js";
@@ -279,5 +280,57 @@ describe("derivation and classification share one grammar (round-trip)", () => {
     const parsed = parseNoteCommitHeader(message.header);
     expect(parsed?.statusChanged).toBe(true);
     expect(parsed?.statusTransition).toEqual({ from: "draft", to: "active" });
+  });
+
+  // Task 3.10 [RED first]: the resolve finalize commit (design §4.4) is
+  // `note(update): … (conflict resolved)` — the shared grammar's header
+  // plus a resolution suffix. Grammar has one home (§3), so the suffix
+  // is applied here, not inline in resolve.ts.
+  describe("withConflictResolvedSuffix", () => {
+    it("appends the resolution suffix to the header and keeps the trailers", () => {
+      const base = deriveCommitMessage({
+        op: "update",
+        type: "spec",
+        frontmatter: { spec_id: "SPEC-9", status: "draft" },
+        body: "# Merged Title",
+        fileName: "SPEC-9.md",
+        author: "Jane Doe",
+        via: "cli",
+      });
+      const resolved = withConflictResolvedSuffix(base);
+
+      expect(resolved.header).toBe(
+        'note(update): spec "Merged Title" [SPEC-9] (conflict resolved)',
+      );
+      expect(resolved.trailers).toEqual(base.trailers);
+      // deterministic: deriving + suffixing twice is byte-identical
+      const again = withConflictResolvedSuffix(
+        deriveCommitMessage({
+          op: "update",
+          type: "spec",
+          frontmatter: { spec_id: "SPEC-9", status: "draft" },
+          body: "# Merged Title",
+          fileName: "SPEC-9.md",
+          author: "Jane Doe",
+          via: "cli",
+        }),
+      );
+      expect(formatCommitMessage(again)).toBe(formatCommitMessage(resolved));
+    });
+
+    it("the suffixed header still parses as the same note update (grammar stays machine-readable)", () => {
+      const base = deriveCommitMessage({
+        op: "update",
+        type: "spec",
+        frontmatter: { spec_id: "SPEC-9" },
+        body: "# Merged Title",
+        fileName: "SPEC-9.md",
+      });
+      const parsed = parseNoteCommitHeader(withConflictResolvedSuffix(base).header);
+      expect(parsed?.op).toBe("update");
+      expect(parsed?.type).toBe("spec");
+      expect(parsed?.title).toBe("Merged Title");
+      expect(parsed?.id).toBe("SPEC-9");
+    });
   });
 });

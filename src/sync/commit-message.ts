@@ -125,6 +125,23 @@ export function conflictNoteCommitHeader(noteId: string): string {
 }
 
 /**
+ * The guided-resolve finalize commit (design §4.4, task 3.10): the
+ * merged note is committed as `note(update): … (conflict resolved)` —
+ * the shared grammar's header plus the resolution suffix. Applied as a
+ * suffix transformation (not a deriveCommitMessage option) so the base
+ * grammar stays untouched and the suffix remains a distinct, testable
+ * concept. The header stays machine-readable: parseNoteCommitHeader
+ * matches the grammar prefix, so changes_since still classifies these
+ * commits as ordinary note updates.
+ */
+export function withConflictResolvedSuffix(message: CommitMessage): CommitMessage {
+  return {
+    header: `${message.header} (conflict resolved)`,
+    trailers: message.trailers,
+  };
+}
+
+/**
  * The meaningful-change suffix (design §4.3): appended when a
  * lifecycle-relevant field (canonical: `status`) transitions between
  * the previous and current frontmatter. Body-only edits produce none.
