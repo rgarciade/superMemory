@@ -14,8 +14,8 @@ const AWS_KEY = "AKIAIOSFODNN7EXAMPLE"; // canonical AWS docs example
 const GITHUB_CLASSIC = `ghp_${"a1B2c3D4e5".repeat(3)}f6G7`; // ghp_ + 36
 const GITHUB_FINE = `github_pat_${"A1b2C3d4E5".repeat(4)}F6`;
 const GITLAB_PAT = `glpat-${"x9Y8z7W6v5".repeat(2)}U4`;
-const SLACK_BOT = "xoxb-123456789012-1234567890123-AbCdEfGhIjKlMnOp";
-const SLACK_APP = "xoxa-223456789012-AbCdEfGhIjKlMnOp";
+const SLACK_BOT = `xoxb-${"123456789012-1234567890123-AbCdEfGhIjKlMnOp"}`; // concatenated: keeps GitHub push protection off this literal
+const SLACK_APP = `xoxa-${"223456789012-AbCdEfGhIjKlMnOp"}`; // concatenated: same
 const GOOGLE_KEY = `AIza${"SyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q".slice(0, 35)}`; // AIza + exactly 35
 const OPENAI_KEY = `sk-proj-${"a1B2c3D4e5".repeat(4)}`;
 
