@@ -7,6 +7,7 @@ import { AppError } from "../util/errors.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerServeCommand } from "./commands/serve.js";
 import { registerSetupCommand } from "./commands/setup.js";
+import { registerSyncCommand } from "./commands/sync.js";
 
 /**
  * The bin entry (OD-1: commander). Builds the program, registers
@@ -26,6 +27,7 @@ export function buildProgram(): Command {
   registerInitCommand(program);
   registerSetupCommand(program);
   registerServeCommand(program);
+  registerSyncCommand(program);
   return program;
 }
 

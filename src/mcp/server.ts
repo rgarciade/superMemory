@@ -1,17 +1,27 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import pkg from "../../package.json" with { type: "json" };
 import { validateBoot } from "../boot/validate-boot.js";
-import { loadGlobalConfig, resolveDefaultVault } from "../config/global-config.js";
+import { loadVaultConfig, resolveSyncTunables } from "../config/vault-config.js";
+import { loadGlobalConfig, resolveDefaultVault, type GlobalConfig } from "../config/global-config.js";
 import { ENV_KEYS, ProcessEnvSource, readString, type EnvSource } from "../config/env.js";
 import { buildIndex } from "../index/build.js";
+import { generateIndexMaps } from "../index/maps.js";
+import { listNotes } from "../index/queries.js";
 import type { IndexStore } from "../index/store.js";
+import { reparseFiles } from "../index/upsert.js";
 import { createNullSyncPort } from "../notes/save-pipeline.js";
 import { loadRules } from "../rules/parser.js";
 import type { RulesModel } from "../rules/types.js";
+import { createSyncEngine, type IndexPort, type SyncEngine } from "../sync/engine.js";
+import { createGitClient, type CommitAuthor } from "../sync/git.js";
+import { PidfileLock, type LockOwner } from "../sync/lock.js";
+import { createSyncScheduler, type SyncScheduler } from "../sync/scheduler.js";
 import { AppError, NO_VAULT_CONFIGURED_MESSAGE } from "../util/errors.js";
-import { SystemClock, type Clock } from "../util/clock.js";
+import { SystemClock, SystemTimerPort, type Clock } from "../util/clock.js";
 import { createLogger } from "../util/log.js";
 import { vaultPaths } from "../util/paths.js";
 import { buildCatalog } from "./catalog.js";
@@ -121,6 +131,125 @@ export function createServer(deps: ServerDeps): McpServer {
   );
 
   return server;
+}
+
+/**
+ * The engine's index seam (OD-5), wired to the REAL implementations: a
+ * post-pull `reparse` re-parses exactly git's changed paths (never a full
+ * re-walk, `index/upsert.ts`), and `regenerateMaps` deterministically
+ * rewrites only the `index/` files whose content changed — the engine's
+ * separate `chore(index)` commit (design §4.1 step 6).
+ *
+ * Composition-root glue: `mcp → index` and `mcp → sync` are both
+ * sanctioned edges (design §1.3); this is what makes the injected port
+ * concrete. Rules are read through `getRules` so a post-sync reload is
+ * reflected immediately (the engine's `onRulesReloaded` swaps the box).
+ */
+export function createVaultIndexPort(
+  store: IndexStore,
+  vaultPath: string,
+  getRules: () => RulesModel,
+): IndexPort {
+  return {
+    async reparse(paths: string[]): Promise<unknown> {
+      return reparseFiles(store, vaultPath, getRules(), paths);
+    },
+
+    async regenerateMaps(): Promise<{ changedPaths: string[]; noteCount: number }> {
+      const changedPaths: string[] = [];
+      for (const map of generateIndexMaps(store)) {
+        const abs = path.join(vaultPath, map.path);
+        let existing: string | undefined;
+        try {
+          existing = await readFile(abs, "utf8");
+        } catch {
+          // New map — no prior content on disk.
+        }
+        if (existing !== map.content) {
+          await mkdir(path.dirname(abs), { recursive: true });
+          await writeFile(abs, map.content, "utf8");
+          changedPaths.push(map.path);
+        }
+      }
+      return { changedPaths, noteCount: listNotes(store).length };
+    },
+  };
+}
+
+/**
+ * The human commit identity (design §4.3): global-config `author` — what
+ * `setup` writes — becomes the git AUTHOR of every engine/resolve commit,
+ * so `git blame` shows people. Absent (setup not run) ⇒ undefined, and
+ * commits inherit the vault's own git identity.
+ */
+export function authorFromConfig(config: GlobalConfig): CommitAuthor | undefined {
+  const name = config.author?.name;
+  const email = config.author?.email;
+  return name && email ? { name, email } : undefined;
+}
+
+export interface SyncStackOptions {
+  vaultPath: string;
+  rules: RulesModel;
+  store: IndexStore;
+  clock: Clock;
+  env: EnvSource;
+  /** The human identity — git author of sync commits (design §4.3). */
+  author?: CommitAuthor;
+  /** Which actor this engine runs as (OD-4). Default "server". */
+  owner?: LockOwner;
+}
+
+export interface SyncStack {
+  engine: SyncEngine;
+  scheduler: SyncScheduler;
+}
+
+/**
+ * The production sync assembly shared by `serve` and `supermemory sync`
+ * (design §5.1 step 4, §4.2): the real pidfile lock, the real git client,
+ * the real index port (`createVaultIndexPort`), tunables resolved per
+ * §3.2, and a TimerPort-based scheduler. The engine's post-sync rules
+ * hook swaps the current-rules box, so the index port and the tunables
+ * provider always see the reloaded model (design §3.1).
+ *
+ * The scheduler is returned INERT: `serveVault` starts it for the process
+ * lifetime; the CLI runs a single `runCycle('manual')` and never starts
+ * one (design §4.2).
+ */
+export async function createVaultSyncStack(opts: SyncStackOptions): Promise<SyncStack> {
+  const paths = vaultPaths(opts.vaultPath);
+  const vaultConfig = await loadVaultConfig(paths.configPath);
+  let currentRules = opts.rules;
+  const tunables = () => resolveSyncTunables(opts.env, vaultConfig, currentRules);
+
+  const engine = createSyncEngine({
+    vaultPath: opts.vaultPath,
+    store: opts.store,
+    rules: opts.rules,
+    tunables,
+    clock: opts.clock,
+    timer: new SystemTimerPort(),
+    lock: new PidfileLock({ vaultRoot: opts.vaultPath }),
+    git: createGitClient(opts.vaultPath),
+    index: createVaultIndexPort(opts.store, opts.vaultPath, () => currentRules),
+    reloadRules: () => loadRules(paths.rulesPath),
+    resolveTunables: (rules) => resolveSyncTunables(opts.env, vaultConfig, rules),
+    onRulesReloaded: (rules) => {
+      currentRules = rules;
+    },
+    author: opts.author,
+    owner: opts.owner,
+  });
+
+  const scheduler = createSyncScheduler({
+    runCycle: engine.runCycle,
+    tunables,
+    timer: new SystemTimerPort(),
+    clock: opts.clock,
+  });
+
+  return { engine, scheduler };
 }
 
 /**
