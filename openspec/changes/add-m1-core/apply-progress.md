@@ -462,6 +462,20 @@ NEW-3 through NEW-6 and the nit were lost with the prior agent's session context
 will be rediscovered by a fresh review run over the remediation batch rather than
 reconstructed from memory. \* severity labels lost — see note.)*
 
+### Fresh review: NEW-1/NEW-2 slice (post-recovery)
+
+Native ordinary review over committed range 7683f56..HEAD (11 files, 584 changed lines), lineage `review-8e1e0e714fd2ef49`, lens review-reliability, tier medium, correction budget 200 — **closed APPROVED, zero blocking findings**; acknowledgement burned (evidence `gentle-ai.review-acknowledged/v1`). Delivery remains under ordinary repository policy; no push/PR was performed.
+
+The reviewer's three advisory findings (all non-blocking, per the closure: separate later work, never a reason to re-run review on this candidate):
+
+| ID | Severity | Location | Advisory finding |
+|---|---|---|---|
+| R3-move-failure-stale-index | WARNING | src/notes/save-pipeline.ts:137-152 | If the atomic move fails mid-write, the index can be left stale relative to disk (informational) |
+| R3-move-failure-untested | SUGGESTION | test/notes/save-pipeline.test.ts:211-315 | The move-failure path lacks direct test coverage (informational) |
+| R3-reparse-collisions-unobserved | SUGGESTION | src/index/upsert.ts:46-53 | reparseFiles propagates PutNoteResult but its callers do not observe id collisions (informational) |
+
+These are recorded here precisely so they cannot be lost the way the NEW-3..NEW-6 finding texts were (lost with the prior agent's session context); they are candidates for a follow-up batch alongside any rediscovered findings, NOT blockers for PR-2.
+
 ## Remaining tasks
 
 - Phase 3 (3.1–3.14): sync engine + commit grammar + conflict ladder + secrets lint + resolve — PR-3, separate apply run. This also absorbs 2.14's local commit-header parser into `src/sync/commit-message.ts` (3.2) and wires the real `SyncPort`/`IndexPort` into `save-pipeline.ts`/`server.ts` (3.13), replacing the P2 null/stub seams.
