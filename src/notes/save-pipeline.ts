@@ -72,6 +72,21 @@ export async function saveNote(
   const fileName = path.basename(input.path);
   const folder = folderOf(input.path);
 
+  // Reject a path escaping the type's declared folder BEFORE touching
+  // the filesystem at all (fresh-context review finding 8) — e.g. a
+  // `../` traversal in `input.path` computes a folder that can never
+  // match `def.folder`. Without this, a traversal path that happens to
+  // exist (a file OR a directory) gets stat'd and read before the
+  // (already-correct) rejection — for a directory, `readFile` throws
+  // EISDIR uncaught instead of a clean validation result.
+  const preCheckIssues = validateNote(input.rules, {
+    type: input.type,
+    frontmatter: input.frontmatter,
+    fileName,
+    folder,
+  }).filter((issue) => issue.kind === "folder");
+  if (preCheckIssues.length > 0) return { ok: false, issues: preCheckIssues };
+
   const fileAbs = path.join(input.vaultPath, input.path);
   const exists = await fileExists(fileAbs);
   const op: WriteEvent["op"] = exists ? "update" : "add";

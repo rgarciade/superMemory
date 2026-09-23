@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { buildIndex } from "../../src/index/build.js";
 import { findNotes } from "../../src/index/queries.js";
@@ -203,6 +203,46 @@ describe("saveNote — Linked Knowledge maintenance", () => {
         "decisions/DEC-1-use-memory-index.md",
       );
     } finally {
+      await vault.cleanup();
+    }
+  });
+});
+
+describe("saveNote — validates before touching the filesystem", () => {
+  // Fresh-context review finding 8: mergeNoteContent (access + readFile)
+  // ran before validateNote, so a path escaping the type's declared
+  // folder was checked for existence — and read — before being rejected.
+  // Proven here with a directory sitting just outside the vault: the old
+  // ordering calls readFile() on it (EISDIR, an unhandled crash instead
+  // of a clean validation rejection); the fix must reject on the folder
+  // mismatch before ever attempting that read.
+  it("rejects a path escaping the type's declared folder without crashing, even when something exists there", async () => {
+    const vault = await createTestVault();
+    const outsideDir = path.join(vault.root, "..", `sm-outside-${Date.now()}`);
+    await mkdir(outsideDir);
+    try {
+      const rules = await loadRules(vault.root);
+      const store = await buildIndex(vault.root, rules);
+
+      const result = await saveNote(
+        { store, clock: fixedClock, syncPort: createNullSyncPort() },
+        {
+          vaultPath: vault.root,
+          rules,
+          type: "decision",
+          path: `../${path.basename(outsideDir)}`,
+          frontmatter: { decision_id: "DEC-1", spec_id: "SPEC-search" },
+          content: "# Escape attempt\n",
+          via: "test",
+        },
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues.some((i) => i.kind === "folder")).toBe(true);
+      }
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true });
       await vault.cleanup();
     }
   });
