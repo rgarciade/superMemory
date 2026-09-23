@@ -88,7 +88,7 @@ describe("P2 phase gate — contract suite over InMemoryTransport", () => {
     });
   });
 
-  it("save schema (end to end) reflects declared required fields — rejects a missing one", async () => {
+  it("save schema (end to end) reflects declared required fields — rejects specifically the missing one", async () => {
     await withVault(async (vault) => {
       const rules = await loadRules(vault.root);
       const store = await buildIndex(vault.root, rules);
@@ -107,6 +107,26 @@ describe("P2 phase gate — contract suite over InMemoryTransport", () => {
           arguments: { type: "decision", spec_id: "SPEC-x", content: "body" },
         });
         expect(result.isError).toBe(true);
+        // Fresh-context review finding 10: asserting isError alone passes
+        // for ANY failure cause. Pin the actual cause: the omitted field,
+        // decision_id, must be the one named — not some unrelated error.
+        const payload = result.structuredContent as { issues?: Array<{ field?: string }> };
+        expect(payload.issues?.some((issue) => issue.field === "decision_id")).toBe(true);
+
+        // Triangulate: a decision that DOES supply decision_id (with
+        // everything else identical) must succeed — proves the rejection
+        // above was really about the missing field, not something else
+        // entirely (e.g. spec_id, content, or the tool itself).
+        const withId = await client.callTool({
+          name: "save",
+          arguments: {
+            type: "decision",
+            decision_id: "DEC-99",
+            spec_id: "SPEC-x",
+            content: "body",
+          },
+        });
+        expect(withId.isError).toBeFalsy();
       } finally {
         await close();
       }
@@ -178,8 +198,41 @@ describe("P2 phase gate — contract suite over InMemoryTransport", () => {
     });
   });
 
-  it("restart identity: a fresh index build over the same vault reproduces identical find results, with no index artifact ever written", async () => {
-    await withVault(async (vault) => {
+  it("restart identity: a fresh index build over the same vault reproduces identical find AND read_with_context results, with no index artifact ever written", async () => {
+    // Fresh-context review finding 10: the original version of this test
+    // compared two builds of an EMPTY, unmodified vault (both sides
+    // trivially {results: []}), and never called read_with_context even
+    // though the index spec's restart-identity scenario names both
+    // "known find/read_with_context results" explicitly. Seed real,
+    // linked notes so both tool results are non-trivial.
+    const SPEC_NOTE = `---
+spec_id: SPEC-restart
+status: active
+owner: Raul
+---
+
+# Restart identity spec
+
+## Linked Knowledge
+`;
+    const DECISION_NOTE = `---
+decision_id: DEC-restart
+spec_id: SPEC-restart
+status: proposed
+---
+
+# Keep the index purely in memory
+
+Links back to [[SPEC-restart]].
+`;
+
+    const vault = await createTestVault({
+      seedNotes: [
+        { path: "specs/SPEC-restart-spec.md", content: SPEC_NOTE },
+        { path: "decisions/DEC-restart-index.md", content: DECISION_NOTE },
+      ],
+    });
+    try {
       const rules = await loadRules(vault.root);
 
       const firstStore = await buildIndex(vault.root, rules);
@@ -192,7 +245,19 @@ describe("P2 phase gate — contract suite over InMemoryTransport", () => {
       });
       const first = await connectedClient(firstServer);
       const firstFind = await first.client.callTool({ name: "find", arguments: {} });
+      const firstRead = await first.client.callTool({
+        name: "read_with_context",
+        arguments: { id: "SPEC-restart" },
+      });
       await first.close();
+
+      // Non-trivial: prove the seeded notes actually came through before
+      // comparing — an accidental empty result on both sides would make
+      // the equality check below pass vacuously.
+      const firstFindPayload = firstFind.structuredContent as { results: unknown[] };
+      expect(firstFindPayload.results.length).toBeGreaterThan(0);
+      const firstReadPayload = firstRead.structuredContent as { backlinks: unknown[] };
+      expect(firstReadPayload.backlinks.length).toBeGreaterThan(0);
 
       // Simulate a restart: build a brand new store from the same vault.
       const secondStore = await buildIndex(vault.root, rules);
@@ -205,13 +270,20 @@ describe("P2 phase gate — contract suite over InMemoryTransport", () => {
       });
       const second = await connectedClient(secondServer);
       const secondFind = await second.client.callTool({ name: "find", arguments: {} });
+      const secondRead = await second.client.callTool({
+        name: "read_with_context",
+        arguments: { id: "SPEC-restart" },
+      });
       await second.close();
 
       expect(secondFind.structuredContent).toEqual(firstFind.structuredContent);
+      expect(secondRead.structuredContent).toEqual(firstRead.structuredContent);
 
       const status = await vault.git.status();
       expect(status.isClean()).toBe(true);
-    });
+    } finally {
+      await vault.cleanup();
+    }
   });
 
   it("incremental visibility: a saved note is immediately findable through the same running server, no restart", async () => {
