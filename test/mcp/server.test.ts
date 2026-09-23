@@ -63,6 +63,22 @@ describe("resolveVaultPath", () => {
       expect((err as AppError).message).toBe(NO_VAULT_CONFIGURED_MESSAGE);
     }
   });
+
+  // Fresh-context review finding 5: the assertion above compares against
+  // the imported constant, so it would still pass even if
+  // NO_VAULT_CONFIGURED_MESSAGE's value drifted from the spec wording —
+  // tautological. Pin the literal spec-mandated string directly.
+  it("fails with the byte-exact literal spec wording, independent of the imported constant", async () => {
+    const configDir = await mkdtemp(path.join(os.tmpdir(), "supermemory-config-"));
+    const env = fakeEnv({ SUPERMEMORY_CONFIG_DIR: configDir });
+
+    try {
+      await resolveVaultPath(undefined, env);
+      expect.unreachable();
+    } catch (err) {
+      expect((err as AppError).message).toBe("No vault configured. Run: supermemory setup");
+    }
+  });
 });
 
 describe("createServer", () => {
