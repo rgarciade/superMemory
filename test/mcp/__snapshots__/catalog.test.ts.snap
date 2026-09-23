@@ -19,7 +19,7 @@ exports[`buildCatalog > catalog snapshot: tool names and descriptions are stable
     "name": "changes_since",
   },
   {
-    "description": "Trigger an immediate sync cycle (pull, commit pending writes, push) and return the resulting status.",
+    "description": "Trigger an immediate sync cycle (pull, commit pending writes, push) and return the resulting status. Currently a documented stub: engine lands in P3; supermemory sync / plain git still work.",
     "name": "sync",
   },
   {

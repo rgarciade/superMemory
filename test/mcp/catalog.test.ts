@@ -142,6 +142,17 @@ describe("buildCatalog", () => {
     expect(save?.description).toContain("decision_id");
   });
 
+  // Fresh-context review finding 6: describeSync promised "pull, commit
+  // pending writes, push" with no hint that P2 ships it as a no-op stub —
+  // the disclaimer only lived in the response `note` field, never in the
+  // description an agent reads before calling the tool.
+  it("sync tool description discloses it is a P2 stub, not an active engine trigger", async () => {
+    const rules = await loadRules();
+    const catalog = buildCatalog(rules);
+    const sync = catalog.tools.find((t) => t.name === "sync");
+    expect(sync?.description).toMatch(/P3/);
+  });
+
   it("catalog snapshot: tool names and descriptions are stable for a given rules model", async () => {
     const rules = await loadRules();
     const catalog = buildCatalog(rules);

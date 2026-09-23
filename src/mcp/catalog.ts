@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { FieldDef, NoteTypeDef, RulesModel } from "../rules/types.js";
+import { ENGINE_STUB_NOTE } from "./tools/status.js";
 
 /**
  * Pure `buildCatalog(rules)` (design §5.2, tool-catalog spec): exactly six
@@ -201,7 +202,15 @@ function describeChangesSince(): string {
 }
 
 function describeSync(): string {
-  return "Trigger an immediate sync cycle (pull, commit pending writes, push) and return the resulting status.";
+  // Fresh-context review finding 6: state the P2 stub status in the
+  // description itself, not only in the response `note` field — an
+  // agent reads the description BEFORE deciding whether to call the
+  // tool, and describing an action the handler doesn't yet perform
+  // (pull/commit/push) without saying so there is misleading.
+  return (
+    "Trigger an immediate sync cycle (pull, commit pending writes, push) and return the " +
+    `resulting status. Currently a documented stub: ${ENGINE_STUB_NOTE}.`
+  );
 }
 
 function describeStatus(rules: RulesModel): string {
