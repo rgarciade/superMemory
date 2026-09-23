@@ -1,22 +1,46 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { buildEngineStateStub, type StatusDeps } from "./status.js";
+import type { SyncEngine } from "../../sync/engine.js";
+import type { EngineState } from "../../sync/state.js";
 
 /**
- * `sync` — trigger a sync cycle and return the resulting status
- * (tool-catalog spec). P2 ships a documented stub: no engine exists yet
- * (P3), so there is no cycle to run — the "resulting status" is today's
- * computed status (same shape `status` returns), matching design §5.3's
- * P2 permission ("documented stubs ... no schema change when P3 wires
- * the real engine").
+ * `sync` — trigger a sync cycle immediately and return the resulting
+ * status (tool-catalog spec: "Sync tool completes a full cycle";
+ * design §5.3: `engine.runCycle('tool')` → resulting status). P3 wiring
+ * (task 3.13): the P2 stub is gone — this is the same ONE code path the
+ * CLI and the scheduler drive. No wire schema change: the result fields
+ * are exactly the engine's status shape (the stub-only `note`
+ * disclosure field is gone because there is no stub).
  */
 
-export function createSyncHandler(deps: StatusDeps) {
-  return (): CallToolResult => toResult(buildEngineStateStub(deps));
+export interface SyncToolDeps {
+  engine: SyncEngine;
 }
 
-function toResult(payload: object): CallToolResult {
+export function createSyncHandler(deps: SyncToolDeps) {
+  return async (): Promise<CallToolResult> => {
+    try {
+      await deps.engine.runCycle("tool");
+      return toResult(deps.engine.state());
+    } catch (err) {
+      // The engine reports expected outcomes (conflict, locked, push
+      // failure…) as reports; a throw here is an unexpected failure —
+      // surface it as an error result naming the cause.
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: err instanceof Error ? err.message : String(err),
+          },
+        ],
+      };
+    }
+  };
+}
+
+function toResult(payload: EngineState): CallToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    structuredContent: payload as Record<string, unknown>,
+    structuredContent: { ...payload },
   };
 }

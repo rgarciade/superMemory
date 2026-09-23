@@ -13,7 +13,6 @@ import { generateIndexMaps } from "../index/maps.js";
 import { listNotes } from "../index/queries.js";
 import type { IndexStore } from "../index/store.js";
 import { reparseFiles } from "../index/upsert.js";
-import { createNullSyncPort } from "../notes/save-pipeline.js";
 import { loadRules } from "../rules/parser.js";
 import type { RulesModel } from "../rules/types.js";
 import { createSyncEngine, type IndexPort, type SyncEngine } from "../sync/engine.js";
@@ -49,11 +48,10 @@ import { createSyncHandler } from "./tools/sync.js";
  * - `serveVault(opts)` is the actual boot I/O: resolve the vault →
  *   `validateBoot` → `loadRules` → build the in-memory index (OD-5,
  *   always from a fresh vault walk, never loaded from disk) → load
- *   templates/instructions → `createServer` → serve over stdio.
- *
- * P2 scope note: no lock acquisition and no engine/scheduler start here
- * — `src/sync/lock.ts` and the sync engine are P3. `sync`/`status` are
- * documented stubs (2.15) until then.
+ *   templates/instructions → assemble the REAL sync engine + scheduler
+ *   (`createVaultSyncStack`, design §5.1 step 4) → `createServer` →
+ *   serve over stdio with the scheduler running for the process
+ *   lifetime.
  */
 
 export interface ServerDeps {
@@ -63,6 +61,13 @@ export interface ServerDeps {
   clock: Clock;
   templates: Record<string, string>;
   instructions?: string;
+  /**
+   * The real sync engine (P3 wiring, design §5.1): drives the `sync`
+   * tool, answers `status`, and IS the save pipeline's `SyncPort`
+   * (it structurally provides `pullLatest` + `notifyWrite` — design
+   * §1.3's inversion made concrete).
+   */
+  engine: SyncEngine;
 }
 
 export function createServer(deps: ServerDeps): McpServer {
@@ -72,9 +77,6 @@ export function createServer(deps: ServerDeps): McpServer {
   );
 
   const catalog = buildCatalog(deps.rules);
-  // P2: no engine yet (P3) — the save pipeline gets a null SyncPort, the
-  // exact P2->P3 seam design §1.3 describes.
-  const syncPort = createNullSyncPort();
 
   const handlers: Record<string, (args: never) => CallToolResult | Promise<CallToolResult>> = {
     find: createFindHandler({ store: deps.store }) as (args: never) => CallToolResult,
@@ -86,19 +88,17 @@ export function createServer(deps: ServerDeps): McpServer {
       rules: deps.rules,
       store: deps.store,
       clock: deps.clock,
-      syncPort,
+      // The REAL SyncPort (P3 wiring): the engine itself — pull-before-
+      // write on updates, write journaling on every save (design §1.3).
+      syncPort: deps.engine,
       via: "mcp",
       saveSchemas: catalog.saveSchemas,
     }) as (args: never) => Promise<CallToolResult>,
     changes_since: createChangesSinceHandler({ vaultPath: deps.vaultPath }) as (
       args: never,
     ) => Promise<CallToolResult>,
-    sync: createSyncHandler({ store: deps.store, rules: deps.rules, clock: deps.clock }) as (
-      args: never,
-    ) => CallToolResult,
-    status: createStatusHandler({ store: deps.store, rules: deps.rules, clock: deps.clock }) as (
-      args: never,
-    ) => CallToolResult,
+    sync: createSyncHandler({ engine: deps.engine }) as (args: never) => Promise<CallToolResult>,
+    status: createStatusHandler({ engine: deps.engine }) as (args: never) => CallToolResult,
   };
 
   for (const tool of catalog.tools) {
@@ -278,7 +278,7 @@ export interface ServeOptions {
   clock?: Clock;
 }
 
-/** Resolves the vault, validates boot, builds the server, and serves over stdio (never interactive). */
+/** Resolves the vault, validates boot, assembles the real engine + scheduler, and serves over stdio (never interactive). */
 export async function serveVault(opts: ServeOptions = {}): Promise<void> {
   const env = opts.env ?? new ProcessEnvSource();
   const clock = opts.clock ?? new SystemClock();
@@ -289,6 +289,7 @@ export async function serveVault(opts: ServeOptions = {}): Promise<void> {
 
   const paths = vaultPaths(vaultPath);
   const rules = await loadRules(paths.rulesPath);
+  const globalConfig = await loadGlobalConfig(env);
 
   const [store, templates, instructions] = await Promise.all([
     buildIndex(vaultPath, rules),
@@ -296,14 +297,44 @@ export async function serveVault(opts: ServeOptions = {}): Promise<void> {
     readAgentInstructions(vaultPath),
   ]);
 
+  // The REAL sync engine + scheduler (design §5.1 step 4): pidfile lock,
+  // git client, index port, tunables — one assembly with the CLI's.
+  const stack = await createVaultSyncStack({
+    vaultPath,
+    rules,
+    store,
+    clock,
+    env,
+    author: authorFromConfig(globalConfig),
+    owner: "server",
+  });
+  const { scheduler } = stack;
+
+  // The save pipeline's SyncPort is the engine itself, with notifyWrite
+  // ALSO resetting the scheduler's debounce window (design §4.2: every
+  // write notification resets the trailing-edge timer). The engine's
+  // methods are closures (no `this`), so a spread-wrapper is safe.
+  const engine: SyncEngine = {
+    ...stack.engine,
+    notifyWrite: (event) => {
+      stack.engine.notifyWrite(event);
+      scheduler.notifyWrite();
+    },
+  };
+
   const server = createServer({
     vaultPath,
     rules,
     store,
     clock,
+    engine,
     templates,
     ...(instructions !== undefined ? { instructions } : {}),
   });
+
+  // Arm the interval fallback for the process lifetime (design §4.2);
+  // the debounce arm happens per write via the SyncPort bridge above.
+  scheduler.start();
 
   log.info(`serving vault at ${vaultPath}`);
   const transport = new StdioServerTransport();
