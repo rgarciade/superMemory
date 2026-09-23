@@ -653,9 +653,106 @@ Tasks 3.11–3.14: CLI `sync` command (single manual cycle + outcome report), CL
 engine-backed `sync`/`status` tools, scheduler start in serve), and the P3 phase gate
 (headline never-delete test, full hermetic M1 loop).
 
+## PR-3 slice 3 (Phase 3, tasks 3.11–3.14) — CLI entries, wiring, P3 phase gate — PR-3 IMPLEMENTATION COMPLETE
+
+Branch `add-m1-core/pr3-sync-engine` (unchanged), same auto-chain / stacked-to-main
+delivery. This slice completed ALL remaining implementation of the change: the two CLI
+entries, the full engine wiring (real `SyncPort`/`IndexPort`/scheduler), and the P3 phase
+gate. Every task is now checked; only the verify phase (optional) and archive remain.
+
+### Commits (one Conventional Commit work unit per task; tests alongside behavior)
+
+| Task | Module | Commit | Subject |
+|---|---|---|---|
+| 3.11 | `src/cli/commands/sync.ts` (+ `createVaultSyncStack`/`createVaultIndexPort`/`authorFromConfig` in `src/mcp/server.ts`) | `0f5a5e0`* | feat(cli): add the sync command — one manual cycle with an outcome report |
+| 3.12 | `src/cli/commands/resolve.ts` | `7296b06`* | feat(cli): add the resolve command — guided conflict resolution at the terminal |
+| 3.13 | `src/mcp/server.ts` + `src/mcp/tools/{sync,status}.ts` + `src/mcp/catalog.ts` (+ `test/helpers/fake-engine.ts`) | `dd1acf5` | feat(mcp): wire the real sync engine into the server and tools |
+| 3.14 | `src/sync/engine.ts` + `src/mcp/tools/sync.ts` + `test/p3/gate.test.ts` | `aeda627` | test(p3): add the phase gate — never-delete headline, secrets, lock, M1 loop |
+| docs | `openspec/` | (this commit) | docs(openspec): record the PR-3 slice 3 (tasks 3.11–3.14) in apply-progress |
+
+\* SHA abbreviated at writing time; see `git log` for the full SHAs.
+
+### TDD Cycle Evidence (strict TDD; each task RED → GREEN → TRIANGULATE)
+
+| Task | RED evidence | GREEN | TRIANGULATE / mid-cycle findings |
+|---|---|---|---|
+| 3.11 | `test/cli/commands/sync.test.ts` — module missing, file failed to load (observed: 0 tests ran) | 8/8 (+1 registration test in `test/cli/index.test.ts`, following the 2.17 serve precedent) | Test expectation fixed mid-cycle: with the REAL index port the cycle also lands its own separate `chore(index)` commit (the engine tests' fake port never regenerated) — the test now asserts both commits |
+| 3.12 | `test/cli/commands/resolve.test.ts` — module missing, 0 tests ran | 8/8 (+1 registration test) | Fixture bug fixed: `git ls-files conflicts/` returns the fixture's `.gitkeep` alongside the conflict note — select the `.md` |
+| 3.13 | Rewritten tool tests failed on the old stub signatures: `createSyncHandler({ engine })` vs `StatusDeps {store, rules, clock}` — compile-level RED | 475/475 suite | New `fake-engine` helper pins the seam; catalog snapshot updated for the intentional `describeSync` change; one test-path expectation fixed (title-less decision saves slug to `-untitled` per the naming template) |
+| 3.14 | Gate run against pre-fix code: 6 failing → after fixture corrections, exactly the 2 production gaps remained RED: headline `expected 'conflict' to be 'synced'` and sync-tool `expected undefined to be true` (isError) | 8/8 gate; 483/483 suite (run TWICE consecutively — no flake); typecheck clean; build clean | Two production gaps fixed RED-first in the gate's work unit (details below) |
+
+### Production gaps the gate caught (fixed in 3.14's work unit)
+
+1. **Conflict state never cleared (would have broken the resolve → sync loop in
+   production).** The engine's tracker recorded conflicts at `curatedAbort` and nothing
+   ever removed them — after a successful `resolve` (whose note flip is disk-only by the
+   disclosed design order), every later cycle still reported `conflict` and pushes stayed
+   paused forever. Fix: the engine reconciles the tracker from the DURABLE record (reads
+   `conflicts/*.md`, keeps `status: open`) at the start of each `lockedCycle` and in
+   `pullLatest` — matching state.ts's own contract ("durable state = vault + git"). A
+   failed read of `conflicts/` never crashes the cycle.
+2. **Blocked secrets were invisible to the sync-tool writer.** Design §4.6 requires the
+   blockage "reported to the writer (tool result / CLI)"; the tool returned only the
+   status (a stuck pending count). Fix: when the cycle report carries blocked writes, the
+   `sync` tool returns an error result naming each `code path: message` (status fields
+   unchanged — the error envelope carries the disclosure).
+
+### Test-fixture lessons (recorded so they aren't relearned)
+
+- Secrets must stay UNCOMMITTED in fixtures: the lint gates the ENGINE's commits; a
+  secret already in history is not a sync write (and will be pushed as-is).
+- Anything through the tool catalog needs the vault's REAL fixture rules — a hand-built
+  `RulesModel` with empty frontmatter defs makes every save's strict wire schema reject.
+- `vi.useFakeTimers()` must start only AFTER real-git fixture setup: simple-git defers
+  its tasks via `setTimeout`, which never fires under a fake clock (the fixture hangs
+  forever).
+
+### Verification (process gates)
+
+- `npm test` — **483/483 across 54 files**, run twice consecutively at slice end (the
+  disclosed transient-parallel-flake risk did NOT reproduce).
+- `npm run typecheck` — clean. `npm run build` — clean (dist includes `sync.js`/
+  `resolve.js` commands).
+- Hermetic throughout: no network, no HOME writes; every push happens INSIDE the vitest
+  process against local tmp bare remotes; the agent shell ran no push, no PR, nothing on
+  `main`.
+
+### Deviations from design / disclosures (slice 3)
+
+1. **Lock "held for the process lifetime" (§4.5) is realized as per-cycle acquisition.**
+   The committed 3.8 engine acquires the pidfile lock per cycle and releases at cycle end
+   (its `finally`); `serveVault` therefore does NOT separately boot-acquire and hold —
+   holding across cycles from the same pid would be silently rewritten-and-deleted by the
+   engine's own release. The one-owner-per-clone invariant is unchanged (the lock
+   serializes all git mutation; a CLI sync between server cycles is safe, and a CLI sync
+   DURING a cycle reports ownership — gated by test). `serveVault` runs as owner
+   `"server"`, the CLI as `"cli"`.
+2. **The server-reaction half of §3.1 (rules-refused ⇒ every tool call errors;
+   rules-reloaded ⇒ live catalog rebuild) is NOT wired in 3.13** — the task text covers
+   engine/scheduler injection + stub replacement + ports only. The engine's hooks exist
+   (`rules-refused` state, `onRulesReloaded`), `serveVault` updates the current-rules box
+   (so the index port and tunables follow reloads), and status/push-pause reflect
+   refusals — but tool-call refusal gating and hot catalog re-registration remain open
+   work for a future change or a verify finding.
+3. **`createVaultSyncStack`/`createVaultIndexPort`/`authorFromConfig` live in
+   `src/mcp/server.ts`** (the established boot-helper home, per the `resolveVaultPath`
+   precedent) rather than a new module — `mcp → sync`/`mcp → index` are sanctioned edges
+   and `cli → mcp` already existed (serve.ts).
+4. **The sync tool returns `engine.state()` after the cycle** — the stub-only `note`
+   disclosure field is gone (keeping it would now be a lie); all spec'd status fields are
+   unchanged, satisfying "no schema change" in the spec-meaningful sense.
+5. **`.memory/local.json` is not read for the author identity** (design §4.3's first
+   preference) — no task ever created that file; resolution is global-config `author`
+   (what `setup` writes) → undefined (commits inherit vault git config).
+
+### Remaining after slice 3
+
+None — 53/53 tasks checked. Next: the parent's PR-3 gate, then the (optional) verify
+phase, then archive. No push, no PR creation, nothing on `main` (user-owned).
+
 ## Workload / PR boundary
 
 - PR-1 = Phase 0 + Phase 1 on `add-m1-core/pr1-scaffold-rules-boot`, base `main`. Estimated ~1,850 lines (forecast) — over the 400-line budget by design; authorized by the resolved chained delivery (stacked-to-main), not a size:exception.
 - PR-2 (now complete, tasks 2.1–2.18, plus a 10-finding remediation batch) = the in-memory index + notes layer + MCP layer on `add-m1-core/pr2-index-notes`, stacked on PR-1. Forecast was ~1,650 lines; actual is larger (19 files/~1,970 lines for 2.1–2.8 alone, per the orchestrator's independent count, plus the 2.9–2.18 batch and the remediation batch on top) — still authorized under the same chained-delivery decision (stacked-to-main), not a size:exception. PR-2 is feature-complete per its own phase gate (2.18) and has cleared its first fresh-context pre-PR review (2 CRITICAL + 8 follow-up findings, all fixed); only Phase 3 remains before the full M1 scope is done.
-- **PR-3** = Phase 3 on `add-m1-core/pr3-sync-engine`, stacked on PR-2 tip `587ee91`, under the same resolved chained delivery (auto-chain / stacked-to-main). **Slice 1 (tasks 3.1–3.7)**: 19 files, +2,573/−113 (~2,686 changed lines) across 7 work-unit commits. **Slice 2 (tasks 3.8–3.10, this run)**: 12 files, +2,887 across 3 work-unit commits — over the 400-line budget by design, authorized by the resolved chain, not a size:exception. **Slice 3 (3.11–3.14: CLI, wiring, gate)** remains before PR-3 is reviewable as a whole.
+- **PR-3** = Phase 3 on `add-m1-core/pr3-sync-engine`, stacked on PR-2 tip `587ee91`, under the same resolved chained delivery (auto-chain / stacked-to-main). **Slice 1 (tasks 3.1–3.7)**: 19 files, +2,573/−113 (~2,686 changed lines) across 7 work-unit commits. **Slice 2 (tasks 3.8–3.10)**: 12 files, +2,887 across 3 work-unit commits. **Slice 3 (tasks 3.11–3.14, this run)**: `src/cli/commands/{sync,resolve}.ts`, the full engine wiring in `src/mcp/` (stub surface deleted), the disk-reconciliation + tool-disclosure fixes in `src/sync/engine.ts`, and `test/p3/gate.test.ts` — 8 files, +1,875/−163 across 4 work-unit commits plus this docs commit. Over the 400-line budget by design, authorized by the resolved chain, not a size:exception. **PR-3 implementation is COMPLETE (53/53 tasks checked, P3 phase gate green: suite 483/483 ×2, typecheck + build clean) — pending the parent's PR gate, then the optional verify phase.**
 - No push, no PR creation, no npm publish (user-owned) — this agent never pushes or opens PRs; the orchestrator handles both.
