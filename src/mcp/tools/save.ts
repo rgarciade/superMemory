@@ -1,8 +1,10 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { IndexStore } from "../../index/store.js";
-import { deriveTitle } from "../../notes/parse.js";
+import { deriveNoteId, deriveTitle, parseNoteFile } from "../../notes/parse.js";
 import { saveNote, type SyncPort } from "../../notes/save-pipeline.js";
-import type { RulesModel } from "../../rules/types.js";
+import type { NoteTypeDef, RulesModel } from "../../rules/types.js";
 import type { Clock } from "../../util/clock.js";
 
 /**
@@ -43,6 +45,14 @@ export function createSaveHandler(deps: SaveDeps) {
     const title = deriveTitle(content, titleArg !== undefined ? { title: titleArg } : {}, "untitled.md");
     const notePath = resolvePath(def.folder, def.naming, frontmatter, title);
 
+    // A naming template that doesn't fully disambiguate (no template at
+    // all, or one that doesn't reference every id-bearing field) can
+    // collide two different notes onto the same path. Never silently
+    // overwrite a note that isn't the one being saved: if the target
+    // already exists, its derived id must match the incoming id exactly.
+    const conflict = await detectPathConflict(deps.vaultPath, notePath, type, def, frontmatter);
+    if (conflict) return errorResult(conflict, { path: notePath });
+
     const result = await saveNote(
       { store: deps.store, clock: deps.clock, syncPort: deps.syncPort },
       {
@@ -63,6 +73,46 @@ export function createSaveHandler(deps: SaveDeps) {
     }
     return toResult({ path: result.path, id: result.id ?? null });
   };
+}
+
+/**
+ * Refuses a save that would silently replace a DIFFERENT note at the
+ * target path (fresh-context review finding 1). Only a path whose
+ * existing note derives the SAME id as the incoming save is treated as
+ * an intentional update; everything else — including a target with no
+ * derivable id at all (e.g. `session_log`, which declares none) — is a
+ * collision and is refused, naming the conflicting path. Append/union
+ * semantics for id-less types is a Phase 3 sync question, not solved
+ * here (disclosed in apply-progress.md).
+ */
+async function detectPathConflict(
+  vaultPath: string,
+  notePath: string,
+  type: string,
+  def: NoteTypeDef,
+  incomingFrontmatter: Record<string, unknown>,
+): Promise<string | undefined> {
+  const fileAbs = path.join(vaultPath, notePath);
+  let raw: string;
+  try {
+    raw = await readFile(fileAbs, "utf8");
+  } catch {
+    return undefined; // nothing at the target path — a plain create, no conflict
+  }
+
+  const { frontmatter: existingFrontmatter } = parseNoteFile(raw);
+  const existingId = deriveNoteId(type, existingFrontmatter, def);
+  const incomingId = deriveNoteId(type, incomingFrontmatter, def);
+
+  if (incomingId !== undefined && incomingId === existingId) {
+    return undefined; // same note, re-saved — an intentional update
+  }
+
+  return (
+    `save would overwrite a different note at "${notePath}" ` +
+    `(existing id: ${existingId ?? "none"}, incoming id: ${incomingId ?? "none"}) — refusing to overwrite. ` +
+    "Choose a naming template that disambiguates by id, or save to an explicit, distinct path."
+  );
 }
 
 /** Deterministic path from the type's folder + naming template + a title slug. */

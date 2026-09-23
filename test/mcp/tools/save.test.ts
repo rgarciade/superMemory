@@ -121,6 +121,79 @@ describe("save (in-memory transport)", () => {
     }
   });
 
+  it("refuses to overwrite a DIFFERENT note when two saves resolve to the same path (no naming template — fresh-context review finding 1)", async () => {
+    const { vault, client, close } = await setup();
+    try {
+      const first = await client.callTool({
+        name: "save",
+        arguments: { type: "incident", incident_id: "INC-1", content: "# Login outage\n" },
+      });
+      expect(first.isError).toBeFalsy();
+      const firstPayload = first.structuredContent as { path: string };
+
+      const second = await client.callTool({
+        name: "save",
+        arguments: { type: "incident", incident_id: "INC-2", content: "# Login outage\n" },
+      });
+      expect(second.isError).toBe(true);
+      const secondPayload = second.structuredContent as { error?: string };
+      expect(secondPayload.error).toContain(firstPayload.path);
+
+      // INC-1 must survive untouched on disk — not overwritten by INC-2's save.
+      const onDisk = await readFile(path.join(vault.root, firstPayload.path), "utf8");
+      expect(onDisk).toContain("incident_id: INC-1");
+    } finally {
+      await close();
+      await vault.cleanup();
+    }
+  });
+
+  it("still allows re-saving the SAME note whose path collides with itself (an intentional update)", async () => {
+    const { vault, client, close } = await setup();
+    try {
+      const args = {
+        type: "incident" as const,
+        incident_id: "INC-1",
+        status: "open",
+        content: "# Login outage\n",
+      };
+      const first = await client.callTool({ name: "save", arguments: args });
+      const second = await client.callTool({
+        name: "save",
+        arguments: { ...args, status: "resolved" },
+      });
+      expect(first.isError).toBeFalsy();
+      expect(second.isError).toBeFalsy();
+
+      const firstPayload = first.structuredContent as { path: string };
+      const onDisk = await readFile(path.join(vault.root, firstPayload.path), "utf8");
+      expect(onDisk).toContain("status: resolved");
+    } finally {
+      await close();
+      await vault.cleanup();
+    }
+  });
+
+  it("refuses a session_log save that would land on an existing path (no id to disambiguate — a Phase 3 sync/append question, not solved here)", async () => {
+    const { vault, client, close } = await setup();
+    try {
+      const first = await client.callTool({
+        name: "save",
+        arguments: { type: "session_log", date: "2026-01-01", actor: "agent", content: "# Session log\n" },
+      });
+      expect(first.isError).toBeFalsy();
+
+      const second = await client.callTool({
+        name: "save",
+        arguments: { type: "session_log", date: "2026-01-02", actor: "agent", content: "# Session log\n" },
+      });
+      expect(second.isError).toBe(true);
+    } finally {
+      await close();
+      await vault.cleanup();
+    }
+  });
+
   it("maintains the target spec's Linked Knowledge section without duplicating on a repeated save", async () => {
     const { vault, client, close } = await setup();
     try {
