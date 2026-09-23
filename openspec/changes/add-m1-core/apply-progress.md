@@ -664,13 +664,11 @@ gate. Every task is now checked; only the verify phase (optional) and archive re
 
 | Task | Module | Commit | Subject |
 |---|---|---|---|
-| 3.11 | `src/cli/commands/sync.ts` (+ `createVaultSyncStack`/`createVaultIndexPort`/`authorFromConfig` in `src/mcp/server.ts`) | `0f5a5e0`* | feat(cli): add the sync command — one manual cycle with an outcome report |
-| 3.12 | `src/cli/commands/resolve.ts` | `7296b06`* | feat(cli): add the resolve command — guided conflict resolution at the terminal |
+| 3.11 | `src/cli/commands/sync.ts` (+ `createVaultSyncStack`/`createVaultIndexPort`/`authorFromConfig` in `src/mcp/server.ts`) | `85d803f` | feat(cli): add the sync command — one manual cycle with an outcome report |
+| 3.12 | `src/cli/commands/resolve.ts` | `55113a7` | feat(cli): add the resolve command — guided conflict resolution at the terminal |
 | 3.13 | `src/mcp/server.ts` + `src/mcp/tools/{sync,status}.ts` + `src/mcp/catalog.ts` (+ `test/helpers/fake-engine.ts`) | `dd1acf5` | feat(mcp): wire the real sync engine into the server and tools |
 | 3.14 | `src/sync/engine.ts` + `src/mcp/tools/sync.ts` + `test/p3/gate.test.ts` | `aeda627` | test(p3): add the phase gate — never-delete headline, secrets, lock, M1 loop |
-| docs | `openspec/` | (this commit) | docs(openspec): record the PR-3 slice 3 (tasks 3.11–3.14) in apply-progress |
-
-\* SHA abbreviated at writing time; see `git log` for the full SHAs.
+| docs | `openspec/` | `6449eaa` | docs(openspec): record the PR-3 slice 3 (tasks 3.11–3.14) in apply-progress |
 
 ### TDD Cycle Evidence (strict TDD; each task RED → GREEN → TRIANGULATE)
 
