@@ -1,5 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { backlinks } from "../../index/queries.js";
+import { backlinks, getNoteById } from "../../index/queries.js";
 import type { IndexStore } from "../../index/store.js";
 import type { IndexedNote } from "../../index/types.js";
 
@@ -22,7 +22,7 @@ const RECENT_LINKED_LIMIT = 5;
 
 export function createReadWithContextHandler(deps: ReadWithContextDeps) {
   return (args: ReadWithContextArgs): CallToolResult => {
-    const note = deps.store.byId.get(args.id);
+    const note = getNoteById(deps.store, args.id);
     if (!note) {
       return errorResult(`no note found with id "${args.id}"`);
     }
@@ -31,23 +31,23 @@ export function createReadWithContextHandler(deps: ReadWithContextDeps) {
 
     const referencedSpecIds = new Set<string>();
     for (const target of note.wikilinks) {
-      const candidate = deps.store.byId.get(target);
+      const candidate = getNoteById(deps.store, target);
       if (candidate && candidate.type === "spec" && candidate.id !== note.id) {
         referencedSpecIds.add(candidate.id);
       }
     }
     if (note.specId && note.specId !== note.id) {
-      const spec = deps.store.byId.get(note.specId);
+      const spec = getNoteById(deps.store, note.specId);
       if (spec && spec.type === "spec") referencedSpecIds.add(spec.id);
     }
     const referencedSpecs = [...referencedSpecIds]
-      .map((id) => deps.store.byId.get(id))
+      .map((id) => getNoteById(deps.store, id))
       .filter((n): n is IndexedNote => n !== undefined)
       .map((n) => ({ id: n.id, status: n.status }));
 
     const recentLinked = linkers
       .filter((linker) => linker.type === "decision" || linker.type === "incident")
-      .map((linker) => deps.store.byId.get(linker.id))
+      .map((linker) => getNoteById(deps.store, linker.id))
       .filter((n): n is IndexedNote => n !== undefined)
       .sort((a, b) => dateOf(b) - dateOf(a))
       .slice(0, RECENT_LINKED_LIMIT)

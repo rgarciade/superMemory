@@ -5,8 +5,11 @@ import type { QueryFilters } from "../../index/types.js";
 
 /**
  * `find` — property + free-text search via `index/queries.ts` (tool-catalog
- * spec: "find — structured and full-text search"). `index/queries.ts`
- * remains the only module that reads the store.
+ * spec: "find — structured and full-text search"). `index/queries.ts` is
+ * the only module outside `src/index` allowed to read the store (design
+ * §3 — the OD-5 swap seam depends on it); every external read goes
+ * through `findNotes`/`backlinks`/`getNoteById`/`listNotes`, never
+ * `store.byId`/`store.byPath` directly.
  */
 
 export interface FindDeps {

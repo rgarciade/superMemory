@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createStore, putNote } from "../../src/index/store.js";
-import { backlinks, findNotes } from "../../src/index/queries.js";
+import { backlinks, findNotes, getNoteById, listNotes } from "../../src/index/queries.js";
 import type { IndexedNote } from "../../src/index/types.js";
 
 // Task 2.4 [RED first]: queries.ts — the only query surface (design OD-5):
@@ -204,5 +204,36 @@ describe("backlinks", () => {
     const store = createStore();
     putNote(store, note());
     expect(backlinks(store, "NOTHING-LINKS-HERE")).toEqual([]);
+  });
+});
+
+// Fresh-context review finding 3: queries.ts must be the ONLY store read
+// surface. getNoteById/listNotes exist so mcp/tools/read-with-context.ts,
+// mcp/tools/status.ts, and notes/save-pipeline.ts never reach into
+// store.byId directly (the OD-5 swap seam depends on this).
+describe("getNoteById", () => {
+  it("returns the full IndexedNote for a known id", () => {
+    const store = createStore();
+    const spec = note({ id: "SPEC-a", path: "specs/a.md" });
+    putNote(store, spec);
+    expect(getNoteById(store, "SPEC-a")).toBe(spec);
+  });
+
+  it("returns undefined for an unknown id", () => {
+    const store = createStore();
+    expect(getNoteById(store, "NOPE")).toBeUndefined();
+  });
+});
+
+describe("listNotes", () => {
+  it("returns every indexed note", () => {
+    const store = createStore();
+    putNote(store, note({ id: "SPEC-a", path: "specs/a.md" }));
+    putNote(store, note({ id: "SPEC-b", path: "specs/b.md" }));
+    expect(listNotes(store).map((n) => n.id).sort()).toEqual(["SPEC-a", "SPEC-b"]);
+  });
+
+  it("returns an empty array for an empty store", () => {
+    expect(listNotes(createStore())).toEqual([]);
   });
 });

@@ -1,4 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { listNotes } from "../../index/queries.js";
 import type { IndexStore } from "../../index/store.js";
 import type { IndexedNote } from "../../index/types.js";
 import type { RulesModel } from "../../rules/types.js";
@@ -65,7 +66,7 @@ function computeStaleNotes(store: IndexStore, rules: RulesModel, clock: Clock): 
   if (!field) return [];
   const now = clock.now();
   const stale: StaleNoteRef[] = [];
-  for (const note of store.byId.values()) {
+  for (const note of listNotes(store)) {
     if (isStale(note, field, now)) {
       stale.push({ id: note.id, title: note.title, path: note.path, type: note.type });
     }

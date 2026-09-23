@@ -32,6 +32,22 @@ export function findNotes(
   return candidates.slice(0, limit).map(toResultItem);
 }
 
+/**
+ * A single note by its full record (not the trimmed `FindResultItem`
+ * shape) — the read every external caller needing frontmatter/body/
+ * wikilinks/specId must go through, instead of reaching into `store.byId`
+ * directly (fresh-context review finding 3: queries.ts is the only
+ * module allowed to read the store — OD-5's swap seam depends on it).
+ */
+export function getNoteById(store: IndexStore, id: string): IndexedNote | undefined {
+  return store.byId.get(id);
+}
+
+/** Every indexed note's full record, in no particular order. */
+export function listNotes(store: IndexStore): IndexedNote[] {
+  return [...store.byId.values()];
+}
+
 export function backlinks(store: IndexStore, targetId: string): FindResultItem[] {
   const linkerIds = store.backwardLinks.get(targetId);
   if (!linkerIds) return [];

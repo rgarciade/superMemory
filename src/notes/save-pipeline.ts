@@ -1,6 +1,7 @@
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import matter from "gray-matter";
+import { getNoteById } from "../index/queries.js";
 import type { IndexStore } from "../index/store.js";
 import { upsertNote } from "../index/upsert.js";
 import type { Clock } from "../util/clock.js";
@@ -155,7 +156,7 @@ async function maintainLinkedKnowledgeIfNeeded(
   if (input.type === "spec" || typeof specId !== "string" || specId === "") return;
   if (linked.id === undefined) return;
 
-  const specNote = deps.store.byId.get(specId);
+  const specNote = getNoteById(deps.store, specId);
   if (!specNote || specNote.type !== "spec") return;
 
   const specAbs = path.join(input.vaultPath, specNote.path);
