@@ -19,7 +19,25 @@ export interface SyncToolDeps {
 export function createSyncHandler(deps: SyncToolDeps) {
   return async (): Promise<CallToolResult> => {
     try {
-      await deps.engine.runCycle("tool");
+      const report = await deps.engine.runCycle("tool");
+      // Blocked writes are reported TO THE WRITER in the tool result
+      // (design §4.6: "tool result / CLI") — a silently pending write
+      // would leave the agent unable to remediate. The status fields
+      // stay the same shape; this uses the error envelope only.
+      if (report.blocked.length > 0) {
+        const listing = report.blocked
+          .map((blocked) => `${blocked.code} ${blocked.path}: ${blocked.message}`)
+          .join("\n");
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `sync blocked ${report.blocked.length} write(s) — nothing was committed:\n${listing}`,
+            },
+          ],
+        };
+      }
       return toResult(deps.engine.state());
     } catch (err) {
       // The engine reports expected outcomes (conflict, locked, push

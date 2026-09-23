@@ -14,7 +14,11 @@ import {
   deriveCommitMessage,
   formatCommitMessage,
 } from "./commit-message.js";
-import { conflictSnapshotBranchName, writeConflictNote } from "./conflict-note.js";
+import {
+  conflictSnapshotBranchName,
+  readConflictNotes,
+  writeConflictNote,
+} from "./conflict-note.js";
 import { createGitClient, type CommitAuthor, type GitClient } from "./git.js";
 import {
   normalizeSessionLog,
@@ -190,6 +194,35 @@ export function createSyncEngine(deps: SyncEngineDeps): SyncEngine {
       conflicts: tracker.snapshot().conflicts,
       ...extra,
     };
+  }
+
+  /**
+   * Reconciles the tracker's conflict list with the DURABLE record: the
+   * conflict notes on disk (state.ts: "durable state = vault + git").
+   * `supermemory resolve` flips a note to `status: resolved` on disk
+   * only — the flip rides the next cycle (disclosed design order), and
+   * this refresh is what makes that flip clear the engine's status and
+   * resume pushing. Without it a resolved conflict would block pushes
+   * forever.
+   */
+  async function refreshConflictsFromDisk(): Promise<void> {
+    try {
+      const records = await readConflictNotes(path.join(deps.vaultPath, "conflicts"));
+      tracker.setConflicts(
+        records
+          .filter((record) => record.status === "open")
+          .map((record) => ({
+            noteId: record.noteId,
+            notePath: record.notePath,
+            snapshotBranch: record.snapshotBranch,
+            conflictNotePath: record.path,
+            detectedAt: record.detectedAt,
+          })),
+      );
+    } catch {
+      // An unreadable conflicts/ dir must never crash the cycle — the
+      // pre-existing tracker state stands.
+    }
   }
 
   function git(): GitClient {
@@ -625,6 +658,10 @@ export function createSyncEngine(deps: SyncEngineDeps): SyncEngine {
     const blocked: CycleBlocked[] = [];
     const commits: string[] = [];
 
+    // Durable conflict record first: a conflict resolved on disk since
+    // the last cycle clears status (and un-pauses push) right here.
+    await refreshConflictsFromDisk();
+
     // 2. pre-pull format_version guard — refuse BEFORE anything moves
     const guard = await prePullGuard();
     if (guard) {
@@ -749,6 +786,7 @@ export function createSyncEngine(deps: SyncEngineDeps): SyncEngine {
           });
         }
         try {
+          await refreshConflictsFromDisk();
           const guard = await prePullGuard();
           if (guard) throw guard;
           const commits: string[] = [];
