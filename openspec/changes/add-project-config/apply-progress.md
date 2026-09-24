@@ -103,3 +103,56 @@ rewiring** — `server.ts`/`setup.ts` keep their old copies; only the tests impo
 - W3 (PR 3): consumer rewiring — serve/sync/resolve (3.1–3.4), stacked on this branch.
 - W4 (PR 4): setup rework + the atomic global-config deletion (4.1–4.6); setup becomes the util's second consumer (`appendMissingLines(root/.gitignore, "supermemory.json\n")`).
 - W5 (PR 5): RFC v1.3 + docs sweep (5.1–5.3); Phase 6 final gate (6.1).
+
+## W3 slice (PR 3) — consumer rewiring: serve/sync/resolve (Phase 3 tasks 3.1–3.4)
+
+Run on `add-project-config/pr3-consumer-rewiring` (stacked on W2 tip `8553330`). Delivery:
+`auto-chain` / `stacked-to-main` (session-resolved; not re-decided). Strict TDD active.
+**Interruption note:** this slice was interrupted mid-flight after task 3.1's RED commit
+(`49def8a`) with an incomplete uncommitted `sync.test.ts` edit (its `makeProjectDir` import was
+still unused); the RESUME run reviewed that edit — kept everything that served the 3.3 RED
+contract (required-`basePath` runner inputs, ambient-cwd commander pin) and completed it with the
+two missing author-seam tests before any commit. Tasks 3.2/3.3 source work was untouched at
+resume.
+
+### Completed tasks
+
+| Task | Commit | Summary |
+|---|---|---|
+| 3.1 | `49def8a` | RED (pre-interruption): `test/mcp/server.test.ts` migrated — imports `resolveVaultPath`/`loadProjectConfig`/`projectAuthor` from `config/project-config.js`; `SUPERMEMORY_CONFIG_DIR` dropped from `fakeEnv`; global-config fallback tests became project-file tests (`makeProjectDir`) plus the subdir-launch case (AD-1 discovery through the chain); unconfigured tests use an empty tmp dir + `fakeEnv({})`; **the byte-exact literal pin stays verbatim** (`"No vault configured. Run: supermemory setup"` — only fixture + import changed, comment documents the history); `authorFromConfig` tests deleted (superseded by W2 `projectAuthor` unit tests). Observed RED: 1 failed \| 11 passed (the serveVault boot test fails against the old `server.ts`). |
+| 3.3 (RED) | `ff0ee1f` | RED: `test/cli/commands/sync.test.ts` completed + `test/cli/commands/resolve.test.ts` — runner inputs gain REQUIRED `basePath` (5 sync + 3 resolve call sites + `SyncCommandInput`/`ResolveCommandInput` contract pinned at the type level); commander action pinned as the one ambient edge (`process.cwd()`) in both register suites; TWO author-seam tests added to sync (with-author ⇒ both engine commits carry the project author; **the degradation case** — project file without `author` ⇒ commits inherit the vault's local Git identity, hermetic via `vaultFlag` + `basePath: project.root` so ambient `SUPERMEMORY_VAULT` can never decide). Observed RED: 4 failed \| 15 passed — and the failures demonstrate the old global-config leak (commits carried the developer's `~/.config/supermemory` identity instead of the project file's). |
+| 3.2 (GREEN) | `9f23e0a` | GREEN: `src/mcp/server.ts` — `resolveVaultPath` + `authorFromConfig` + the `global-config` import deleted, **no re-export shim**; `ServeOptions.basePath?` (defaults to `process.cwd()` inside `serveVault` — the documented non-commander edge, AD-6); chain via `resolveVaultPath({ vaultFlag, env, basePath })`; `author = projectAuthor(await loadProjectConfig(basePath))`; `createVaultSyncStack` flow unchanged; `ENV_KEYS`/`readString`/`AppError`/`NO_VAULT_CONFIGURED_MESSAGE` imports trimmed with the dead code. Transition: server.test.ts 1F/11P → **12/12**. |
+| 3.3 (GREEN) | `4f1094d` | GREEN: `src/cli/commands/sync.ts` + `src/cli/commands/resolve.ts` — `basePath: string` REQUIRED on both inputs; commander actions inject `process.cwd()`; imports swap to `config/project-config.js` (the `mcp/server` inverted dependency dies — only the sanctioned shared `createVaultSyncStack` import remains in sync.ts); `runResolve({ …, author })` flow unchanged; `runResolve`'s author is computed inline per AD-7. Ripple: `test/p3/gate.test.ts` call sites gain `basePath: vault.root` (inputs-only; assertions unchanged — the vault work tree has no `supermemory.json`, so the author degrades to inherited identity). Transitions: sync+resolve 4F/15P → **19/19**; all 8 RED type findings green. |
+| 3.4 | (gate, no commit) | W3 slice gate — all green, see verification below. Gate-only task: the docs commit records it (W1/W2 precedent). |
+
+### TDD Cycle Evidence (strict_tdd)
+
+| Task | RED (failing first, observed) | GREEN | REFACTOR |
+|---|---|---|---|
+| 3.1 | (pre-interruption, `49def8a`) `test/mcp/server.test.ts` focused: 1 failed \| 11 passed — `serveVault` boot test fails against the old in-file resolver (no `basePath` option, global-config fallback) | — | — |
+| 3.3 RED | `npx vitest run test/cli/commands/sync.test.ts test/cli/commands/resolve.test.ts` → **4 failed \| 15 passed**: sync ambient-cwd (`basePath` undefined vs `process.cwd()`), sync with-author + degradation (old global-config path committed with the developer's personal identity — the leak the change kills), resolve ambient-cwd. Type-level RED: `basePath` absent from both input interfaces (8 tsc findings) | — | — |
+| 3.2 | — (implementation lands against the red `server.test.ts`) | focused: **12/12** in `test/mcp/server.test.ts` | dead imports trimmed with the deleted functions; no shim left |
+| 3.3 GREEN | — (implementation lands against the red CLI suites) | focused: **19/19** across sync + resolve suites; `test/p3/gate.test.ts` **8/8** | — (inputs-only ripple in gate.test.ts) |
+| 3.4 | — | full `npx vitest run`: **56 files / 526 tests, all passing**; `tsc --noEmit` clean | — (gate) |
+
+### Files changed (W3 slice)
+
+- Modified: `src/mcp/server.ts` (−old resolver/author helpers, +basePath edge), `src/cli/commands/sync.ts`, `src/cli/commands/resolve.ts` (required `basePath`, import swaps)
+- Modified: `test/mcp/server.test.ts` (migration), `test/cli/commands/sync.test.ts`, `test/cli/commands/resolve.test.ts` (RED contracts + author-seam cases), `test/p3/gate.test.ts` (4 input-ripple sites)
+- Docs: `openspec/changes/add-project-config/tasks.md` (3.1–3.4 ticked), this file
+
+### Verification evidence (task 3.4 slice gate)
+
+- `npx vitest run` → **56 files / 526 tests, all passing** (520 at W2 tip + 6 net new/renumbered).
+- `npm run typecheck` → clean. `npm run build` → clean.
+- `git diff add-project-config/pr2-project-config -- src/sync/engine.ts src/sync/git.ts` → **empty** (AD-7 honored: the author seam is the same injected dep, only the source swapped).
+- `src/config/global-config.ts` still present and green (`test/config/global-config.test.ts` inside the 526; sole remaining consumer `setup.ts` untouched — W4 deletes module + consumer atomically).
+- Diff confined to the seven W3 files + openspec docs; four conventional commits on the branch (`49def8a`, `ff0ee1f`, `9f23e0a`, `4f1094d`); nothing pushed; `main` untouched.
+- **Review-budget variance (reported, not self-excepted):** forecast ~240 → actual **465 gross** (359 + 106; server.test.ts migration 177 and sync/resolve test contracts 143 dominate — test churn pinned by the tasks' enumerated scenarios). The slice boundary 3.1–3.4 is one cohesive rewiring (RED commits precede both GREENs; splitting would strand one side of the deleted exports). No further honest split exists; per W2 precedent the decision is deferred to review; no `size:exception` claimed.
+
+### Notes & deviations (W3)
+
+- **Commit order vs task numbering (deliberate, TDD-honest).** The 3.3 RED commit (`ff0ee1f`) precedes the 3.2 GREEN commit (`9f23e0a`): a behavioral RED must be observed against the pre-rewiring source, and 3.2 deletes the shared exports `sync.ts`/`resolve.ts` import — after it lands, CLI suites can only fail as module errors, not honest behavioral REDs (AD-6 forbids re-export shims that would paper over this). Consequence, documented: the tree at `9f23e0a` transiently breaks the sync/resolve suites (imports of removed exports); the slice's PR boundary is the whole W3 range, where everything is green (526/526).
+- **Degradation-test hermeticity choice.** The author-seam tests pass `vaultFlag: vault.root` AND `basePath: project.root`: resolution is pinned hermetically (ambient `SUPERMEMORY_VAULT` can never decide, honoring the seam rule — no env mutation), while the author lookup still flows through the project file exactly as the sync-ladder delta scenarios specify. Flag-less project-file resolution is pinned where it belongs: the chain unit tests (W2) and the serveVault boot tests (3.1).
+- **`--vault` option help text** in sync.ts/resolve.ts still says "(overrides SUPERMEMORY_VAULT / vaults.default)" — stale global-config wording, deliberately untouched in W3 (minimal-diff scope); flagged for the W5 docs sweep alongside README/docs.
+- The full run passed first try (no rerun needed; the known transient-parallel-flake lineage did not fire).
