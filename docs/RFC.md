@@ -1,6 +1,6 @@
 # RFC: supermemory — A Team Knowledge Layer over a Git-Synced Obsidian Vault
 
-Status: Draft v1.2 (multi-vault serving + `project` parameter; agent-relayed vault confirmation; configurable sync modes `auto`/`manual`/`pr` with strictest-wins)
+Status: Draft v1.3 (per-project supermemory.json replaces the global config; legacy .memory/local.json superseded)
 Author: supermemory maintainers
 Target stack: Node.js LTS, TypeScript, MCP (Model Context Protocol)
 
@@ -34,8 +34,8 @@ they do not give a team a *shared structure*.
    vault is just a folder that happens to be a Git repo.
 
 The app itself is **stateless and disposable** (see §3 Invariants): it never
-stores memories. Everything durable lives in the vault repo or in a tiny global
-config of pointers.
+stores memories. Everything durable lives in the vault repo or in a tiny
+per-project config file.
 
 ---
 
@@ -77,22 +77,24 @@ config of pointers.
        └────────────────┬┴──────────────────┘
                         ▼
               ┌───────────────────┐        ┌──────────────────────┐
-              │  supermemory MCP  │───────▶│  ~/.config/supermem  │
-              │  (stateless, TS)  │        │  /config.json        │
-              │                   │        │  pointers + identity │
-              │  · rules engine   │        └──────────────────────┘
-              │  · tool catalog   │
-              │  · sync engine    │        ┌──────────────────────┐
-              │  · search index   │───────▶│  VAULT (private Git  │
-              └─────────┬─────────┘        │  repo, per team)     │
-                        │                  │                      │
-                        │  read/write      │  notes (*.md)        │
-                        │  git -C vault    │  .memory/rules.md    │
-                        ▼                  │  .memory/templates/  │
-              ┌───────────────────┐        │  .memory/cache/      │
-              │  Git remote       │◀──────▶│  (.gitignored index) │
-              │  (GitHub/GitLab)  │ push/  └──────────────────────┘
-              └───────────────────┘ pull
+              │  supermemory MCP  │◀───────│    AGENT PROJECT     │
+              │  (stateless, TS)  │ reads  │  supermemory.json    │
+              │                   │  at    │  (gitignored):       │
+              │  · rules engine   │  boot  │   vault pointer +    │
+              │  · tool catalog   │ nearest│   author identity    │
+              │  · sync engine    │ work-  └──────────────────────┘
+              │  · search index   │ tree root
+              └─────────┬─────────┘
+                        │                  ┌──────────────────────┐
+                        ├─────────────────▶│  VAULT (private Git  │
+                        │  read/write      │  repo, per team)     │
+                        │  git -C vault    │                      │
+                        ▼                  │  notes (*.md)        │
+              ┌───────────────────┐        │  .memory/rules.md    │
+              │  Git remote       │◀──────▶│  .memory/templates/  │
+              │  (GitHub/GitLab)  │ push/  │  .memory/cache/      │
+              └───────────────────┘ pull   │  (.gitignored index) │
+                                           └──────────────────────┘
                         ▲
         Humans: Obsidian / VS Code / any editor opens the same folder;
         `supermemory sync` or plain `git push` publishes manual edits.
@@ -104,9 +106,11 @@ config of pointers.
    are Markdown in the vault repo. The search index is derived state held in
    memory and rebuilt from the vault at every start; `.memory/cache/`
    (gitignored) holds only transient runtime state, such as the sync lock.
-2. **The app never stores memories.** Outside the vault it writes exactly two
-   things: the global config (pointers + author identity) and logs. No notes,
-   no copies, no telemetry, no shadow stores. Deleting the app loses nothing.
+2. **The app never stores memories.** Outside the vault it writes exactly:
+   the gitignored `supermemory.json` (plus the optional committed
+   `supermemory.example.json` and one `.gitignore` line) **inside the agent
+   project**, and logs. No notes, no copies, no telemetry, no shadow stores.
+   Deleting the app loses nothing.
 3. **Direct filesystem access** to the vault. No dependency on the Obsidian
    Local REST API or any plugin. Works whether or not Obsidian is running.
 4. **One sync code path.** The CLI (`supermemory sync`) and the MCP server call
@@ -139,7 +143,6 @@ Failure is fail-fast with an actionable message.
 │   ├── rules.md            # team ontology (committed, versioned)
 │   ├── templates/          # note templates (committed)
 │   ├── config.yml          # sync + policy settings (committed)
-│   ├── local.json          # per-user author identity (gitignored)
 │   └── cache/              # transient runtime state, e.g. sync lock (gitignored)
 ├── specs/                  # living specifications (index hubs)
 ├── decisions/              # ADR-style micro-decisions
@@ -324,10 +327,10 @@ descriptions embed the team's own prose rules. All schemas are strict
 
 ### 5.1 Multi-vault mode and the `project` parameter
 
-One server can serve a single vault (`serve --vault <path|name>`) or every
-registered vault (`serve --multi`). Both modes share the same global registry
-(`vaults` in the global config) and the same rules engine; the tool catalog
-adapts at launch:
+One server can serve a single vault (`serve --vault <path>`) or multiple
+vaults (`serve --multi`) — an M2 capability that re-anchors on the
+per-project `supermemory.json` files: there is no global registry. Both
+modes share the same rules engine; the tool catalog adapts at launch:
 
 - **Single-vault mode**: tools take no `project` argument.
 - **Multi-vault mode**: `project` is a **required** argument on every data
@@ -336,8 +339,10 @@ adapts at launch:
   vault. An unknown name fails with the list of registered projects so the
   agent can ask instead of guessing.
 
-Registration is human-owned. `supermemory vault add <name> <path>` (or the
-setup wizard) registers a vault directly. The `vault_register` tool lets an
+Registration is human-owned (M2 design intent). `supermemory vault add
+<name> <path>` (or the setup wizard) records a vault mapping in the project's
+`supermemory.json` — there is no central registry. The `vault_register` tool
+lets an
 agent *propose* a mapping (validated: git repo, `.memory/` present, not inside
 the app repo), which becomes a **pending** entry activated once by a human via
 `supermemory vault confirm <name>`. The tool never overwrites an existing
@@ -353,8 +358,8 @@ same turn.
 
 | Tool | Purpose |
 |---|---|
-| `projects_list` | Registered vaults: name, path, last sync, format version. Read-only; lets an agent discover and disambiguate the project it is working on. |
-| `vault_register` | Proposes a new name→path mapping as a pending entry; its response returns the exact `pending_command` for the human to run (or to approve via the agent's shell gate). Cannot modify or overwrite existing mappings. |
+| `projects_list` | Registered vaults: name, path, last sync, format version. Read-only; lets an agent discover and disambiguate the project it is working on. *(M2 design intent.)* |
+| `vault_register` | Proposes a new name→path mapping as a pending entry; its response returns the exact `pending_command` for the human to run (or to approve via the agent's shell gate). Cannot modify or overwrite existing mappings. *(M2 design intent.)* |
 
 Cross-project search (`project: "*"`) is a future extension, not MVP.
 
@@ -420,8 +425,9 @@ Spec: SPEC-search-002
 
 - Header grammar: `note(<add|update|delete>): <type> "<title>" [<id>]`;
   updates include the meaningful change (`spec SPEC-auth-003 draft→active`).
-- **Git author is always the human** (from `.memory/local.json` or inherited
-  git config). Agent/client provenance goes in trailers. `git blame` must show
+- **Git author is always the human** (from the project config's `author`,
+  falling back to inherited Git identity). Agent/client provenance goes in
+  trailers. `git blame` must show
   people, not a bot.
 - Generated index regeneration lands in separate commits:
   `chore(index): regenerate maps (23 notes)`.
@@ -479,16 +485,25 @@ the ontology by cloning.
 ### 7.2 Per member
 
 ```
-git clone <vault-url>
-npx supermemory setup        # one-time terminal wizard:
-#   · vault path (validated: git repo, .memory present; init offered if empty)
-#   · author identity (defaults to the user's git config)
-#   · writes ~/.config/supermemory/config.json
-npx supermemory install --client cursor
-#   → writes the MCP entry into the client config, wired to the vault
-npx supermemory vault add acme /path/to/acme-memory
-#   → registers more projects in the same global config
-#     (`vault confirm` activates agent-proposed pending registrations)
+cd <agent-project>            # the Git work tree where your agent works
+                              # (any subdirectory is fine — setup writes at
+                              # the work-tree root, never inside the vault)
+npx supermemory setup         # one-time terminal wizard:
+#   · guards — refuses to run in $HOME or outside a Git work tree, before
+#     any prompt (a refusal writes nothing)
+#   · vault path — re-prompted until it passes boot validation (an existing
+#     Git repo containing .memory/rules.md); 5 invalid attempts abort,
+#     still writing nothing
+#   · author identity — defaults from the vault repo's git config
+#   · writes at the work-tree root:
+#       supermemory.json          (gitignored: vault pointer + author identity)
+#       supermemory.example.json  (committed placeholder; created only when
+#                                 absent) and one idempotent .gitignore line
+npx supermemory install --client cursor   # M2: writes the MCP entry into the
+#   client config, wired to this project's vault
+npx supermemory vault add acme /path/to/acme-memory   # M2: records another
+#   project's vault mapping in its supermemory.json
+#   (`vault confirm` activates agent-proposed pending registrations)
 ```
 
 The MCP server itself is **never interactive**: stdin belongs to the protocol.
@@ -524,26 +539,33 @@ Profiles are declared in `.memory/config.yml`.
 ### 7.5 Updating
 
 The app holds no state (§3 Invariants): updating means replacing the binary /
-pulling the latest npm version. Global config survives; data lives in the
-vault; the `format_version` contract protects against member/version drift
-(§4.4). `npx supermemory@latest` is a complete update.
+pulling the latest npm version. The per-project `supermemory.json` survives
+updates (it lives in the project); data lives in the vault; the
+`format_version` contract protects against member/version drift (§4.4).
+`npx supermemory@latest` remains a complete update.
 
 ---
 
 ## 8. Configuration Reference
 
-**Launch modes**: `serve --vault <path|name>` serves exactly one vault;
-`serve --multi` serves every registered vault (§5.1). With no flag:
-`SUPERMEMORY_VAULT` env → `vaults.default` in global config.
+**Launch modes**: `serve --vault <path>` serves exactly one vault;
+`serve --multi` (M2) serves multiple vaults (§5.1). With no flag:
+`SUPERMEMORY_VAULT` env → `supermemory.json` at the nearest Git work-tree
+root of the launch directory.
 
 ```jsonc
-// ~/.config/supermemory/config.json  (per user, outside any repo)
+// <agent-project>/supermemory.json  (gitignored — written by setup)
 {
-  "vaults": {
-    "default": "/Users/raul/memory-vault",
-    "acme":    "/Users/raul/work/acme-memory"
-  },
+  "vault": "/Users/raul/memory-vault",
   "author": { "name": "Raul", "email": "raul@example.com" }
+}
+```
+
+```jsonc
+// <agent-project>/supermemory.example.json  (committed placeholder —
+// placeholder vault path only, never an author identity)
+{
+  "vault": "/absolute/path/to/your/vault"
 }
 ```
 
@@ -554,14 +576,12 @@ Environment variables:
 | `SUPERMEMORY_VAULT` | Vault path override (also used for dev dogfooding via `.env` in the source repo — `.env` is always gitignored; `.env.example` documents it). |
 | `SUPERMEMORY_SYNC_MODE` | Local override of the sync mode (`auto` \| `manual` \| `pr`), general. Strictest-wins against the vault's committed policy (§6.1). |
 | `SUPERMEMORY_SYNC_MODE__<PROJECT>` | Per-project local override, e.g. `SUPERMEMORY_SYNC_MODE__ACME=manual` (project name uppercased, dashes → underscores, `__` separator). |
-| `SUPERMEMORY_CONFIG_DIR` | Override config directory (defaults to `~/.config/supermemory`). |
 | `SUPERMEMORY_LOG_LEVEL` | `error` \| `warn` \| `info` \| `debug`. |
 
-The engine loads `~/.config/supermemory/.env` (if present) before real
-environment variables; the source repo's own `.env` serves dev dogfooding.
-Team-level sync policy lives in the vault's committed `.memory/config.yml`
-(`git.mode`), so it travels with the vault — local `.env` is for machine and
-personal preferences only.
+The source repo's own `.env` serves dev dogfooding. Team-level sync policy
+lives in the vault's committed `.memory/config.yml` (`git.mode`), so it
+travels with the vault — local `.env` is for machine and personal preferences
+only.
 
 Client integration (written automatically by `supermemory install`):
 
