@@ -1,8 +1,9 @@
 import { existsSync, realpathSync } from "node:fs";
-import { lstat, mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
 import { simpleGit, type SimpleGit } from "simple-git";
+import { appendMissingLines } from "../../util/append-lines.js";
 import { AppError } from "../../util/errors.js";
 import { createLogger } from "../../util/log.js";
 import { assertVaultOutsideAppRepo, validateBoot } from "../../boot/validate-boot.js";
@@ -584,26 +585,18 @@ function isEexist(err: unknown): boolean {
 }
 
 /**
- * Writes `content` to `filePath` if it does not exist; otherwise
- * appends only the lines from `content` that are not already
- * effectively present, so a pre-existing file (e.g. a vault root's own
- * `.gitignore`) never loses its own entries. The original bytes are
- * captured into `tracker` before any write, so a rollback can restore
- * them exactly (never re-running the merge).
+ * Appends to `filePath` only the lines from `content` that are not
+ * already effectively present, so a pre-existing file (e.g. a vault
+ * root's own `.gitignore`) never loses its own entries — the byte-exact
+ * raw-Buffer, EOL-preserving, negation-aware semantics now live in the
+ * shared `appendMissingLines` util (`src/util/append-lines.ts`, design
+ * AD-5), which init shares with setup's project `.gitignore` line.
  *
- * Operates on raw bytes (`Buffer`), never decodes the existing file as
- * UTF-8 text: a byte that is not valid UTF-8 on its own (e.g. a Latin-1
- * 0xE9) would otherwise be silently and irreversibly turned into the
- * UTF-8 replacement character on read, corrupting it in both the
- * merged output that gets committed and whatever a rollback "restores".
- * `content` (our own scaffold template) is always plain ASCII, so
- * comparing/appending it as bytes is exact either way.
- *
- * "Effectively present" is negation-aware (gitignore semantics: a later
- * `!line` un-ignores an earlier `line`) — only the LAST occurrence among
- * a line and its negation decides whether it is still in effect, so a
- * negated entry is treated as missing and re-appended. The file's own
- * existing line ending (LF or CRLF) is preserved for the appended lines.
+ * The pre-call bytes are captured into `tracker` before any write, so a
+ * rollback can restore them exactly (never re-running the merge): a
+ * file this call created from scratch (no original) is deleted by the
+ * rollback; a pre-existing file is restored to its exact original
+ * bytes.
  *
  * Returns whether this call actually changed the file's bytes: `false`
  * means it already existed AND already satisfied every required line
@@ -615,86 +608,13 @@ async function mergeMissingLines(
   content: string,
   tracker: ScaffoldTracker,
 ): Promise<boolean> {
-  const existed = existsSync(filePath);
-  const original = existed ? await readFile(filePath) : undefined;
-  tracker.mergedFiles.push({ path: filePath, original });
-
-  if (original === undefined) {
-    await writeFile(filePath, content, "utf8");
-    return true;
-  }
-
-  const eol = original.includes("\r\n") ? "\r\n" : "\n";
-  const eolBuf = Buffer.from(eol, "ascii");
-  const existingLines = splitLinesRaw(original);
-  const requiredLines = content
-    .split("\n")
-    .map((line) => line.replace(/\r$/, "").trim())
-    .filter((line) => line.length > 0);
-
-  const missingLines = requiredLines.filter(
-    (line) => !isEffectivelyPresentRaw(existingLines, line),
-  );
-  if (missingLines.length === 0) return false;
-
-  const needsSeparator = original.length > 0 && !bufferEndsWith(original, eolBuf);
-  const appended = Buffer.from(missingLines.join(eol) + eol, "utf8");
-  await writeFile(
-    filePath,
-    needsSeparator ? Buffer.concat([original, eolBuf, appended]) : Buffer.concat([original, appended]),
-  );
-  return true;
-}
-
-/** Splits `buf` on raw `\n` bytes, trimming a trailing `\r` and ASCII space/tab from each line — never decodes the bytes as text. */
-function splitLinesRaw(buf: Buffer): Buffer[] {
-  const lines: Buffer[] = [];
-  let start = 0;
-  for (let i = 0; i < buf.length; i += 1) {
-    if (buf[i] === 0x0a) {
-      lines.push(trimLineRaw(buf.subarray(start, i)));
-      start = i + 1;
-    }
-  }
-  if (start < buf.length) lines.push(trimLineRaw(buf.subarray(start)));
-  return lines;
-}
-
-function trimLineRaw(line: Buffer): Buffer {
-  let end = line.length;
-  if (end > 0 && line[end - 1] === 0x0d) end -= 1; // trailing CR (CRLF line)
-  let start = 0;
-  while (start < end && isAsciiBlank(line[start]!)) start += 1;
-  while (end > start && isAsciiBlank(line[end - 1]!)) end -= 1;
-  return line.subarray(start, end);
-}
-
-function isAsciiBlank(byte: number): boolean {
-  return byte === 0x20 || byte === 0x09;
-}
-
-function bufferEndsWith(buf: Buffer, suffix: Buffer): boolean {
-  if (suffix.length === 0) return true;
-  if (buf.length < suffix.length) return false;
-  return buf.subarray(buf.length - suffix.length).equals(suffix);
-}
-
-/**
- * True when `target` (one of our own plain-ASCII scaffold lines) is in
- * effect among `existingLines` (raw byte lines from the file): its LAST
- * occurrence (among itself and its `!target` negation) must be the
- * positive form. Absent entirely, or last-negated, counts as NOT
- * present (so it gets re-appended).
- */
-function isEffectivelyPresentRaw(existingLines: Buffer[], target: string): boolean {
-  const targetBuf = Buffer.from(target, "utf8");
-  const negatedBuf = Buffer.from(`!${target}`, "utf8");
-  let present = false;
-  for (const line of existingLines) {
-    if (line.equals(targetBuf)) present = true;
-    else if (line.equals(negatedBuf)) present = false;
-  }
-  return present;
+  const { changed, original } = await appendMissingLines(filePath, content);
+  // The util's `null` original (file did not exist) maps to `undefined`
+  // here: rollback treats an undefined original as "created fresh by
+  // this call" and deletes the file — exactly the pre-extraction
+  // behavior, pinned unchanged by the init rollback tests.
+  tracker.mergedFiles.push({ path: filePath, original: original ?? undefined });
+  return changed;
 }
 
 /**
