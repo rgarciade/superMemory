@@ -14,10 +14,11 @@ export class ProcessEnvSource implements EnvSource {
   }
 }
 
-/** Every SUPERMEMORY_* knob M1 reads (RFC §8; timing knobs only for sync). */
+/** Every SUPERMEMORY_* knob M1 reads (RFC §8; timing knobs only for sync).
+ *  The config-dir knob died with the global config (add-project-config
+ *  task 4.5 — there is no global config location anymore). */
 export const ENV_KEYS = {
   vault: "SUPERMEMORY_VAULT",
-  configDir: "SUPERMEMORY_CONFIG_DIR",
   logLevel: "SUPERMEMORY_LOG_LEVEL",
   syncIntervalMinutes: "SUPERMEMORY_SYNC_INTERVAL_MINUTES",
   debounceSeconds: "SUPERMEMORY_DEBOUNCE_SECONDS",

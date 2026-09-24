@@ -28,9 +28,10 @@ describe("ProcessEnvSource", () => {
 
 describe("ENV_KEYS", () => {
   it("names every SUPERMEMORY_* knob M1 reads", () => {
+    // The config-dir env knob died with the global config
+    // (add-project-config task 4.5) — it must NOT come back.
     expect(ENV_KEYS).toEqual({
       vault: "SUPERMEMORY_VAULT",
-      configDir: "SUPERMEMORY_CONFIG_DIR",
       logLevel: "SUPERMEMORY_LOG_LEVEL",
       syncIntervalMinutes: "SUPERMEMORY_SYNC_INTERVAL_MINUTES",
       debounceSeconds: "SUPERMEMORY_DEBOUNCE_SECONDS",
