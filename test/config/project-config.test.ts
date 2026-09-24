@@ -235,7 +235,7 @@ describe("loadProjectConfig — fail-safe matrix (every malformed case ⇒ undef
 
   it("unknown keys are ignored — the loaded shape stays flat", async () => {
     const project = await makeProjectDir({
-      config: { vault: ABSOLUTE_VAULT, legacy: true, extra: { nested: 1 } },
+      config: { vault: ABSOLUTE_VAULT, stale: true, extra: { nested: 1 } },
     });
     try {
       await expect(loadProjectConfig(project.root)).resolves.toEqual({

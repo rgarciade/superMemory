@@ -185,7 +185,7 @@ describe("buildIndex", () => {
     }
   });
 
-  it("works without an onConflict callback at all (optional, backward compatible)", async () => {
+  it("works without an onConflict callback at all (optional)", async () => {
     const vault = await createTestVault({
       seedNotes: [
         { path: "decisions/DEC-1-a.md", content: DECISION_NOTE },
