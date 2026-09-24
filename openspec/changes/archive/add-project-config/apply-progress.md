@@ -373,3 +373,27 @@ the real tip; the hash in the task text is stale, not the chain.
 - PromptPort/scriptedPort seam untouched; 11 new helper tests; full suite 548/548 across 56
   files; typecheck + build clean. Commits: setup completion + lockfile promotion on
   `add-project-config/pr5-rfc-docs`.
+
+---
+
+## Archive record (appended at archive time, 2026-09-24)
+
+- Change archived at 2026-09-24 on branch add-project-config/pr5-rfc-docs; verify PASS-WITH-NOTES
+  (zero blockers).
+- Canonical specs synced at archive time (parent-instructed; no separate sync phase ran): NEW
+  `openspec/specs/project-config/spec.md` composed wholesale from the delta (7 requirements / 21
+  scenarios, byte-identical); MODIFIED `openspec/specs/boot-validation/spec.md` — requirement
+  "Fail-fast actionable errors" replaced in place (ownership clause + project-file source list;
+  the other canonical requirement and all other scenarios byte-identical, diff-verified vs HEAD);
+  MODIFIED `openspec/specs/sync-ladder/spec.md` — requirement "Human authorship with trailer
+  provenance" replaced in place (project-config author source + the new degradation scenario;
+  the other 10 requirements byte-identical, diff-verified vs HEAD). Delta-only
+  `(Previously: …)` change-notes stay in the archived deltas; canonical specs carry current
+  behavior. Details in `archive-report.md`.
+- Carry into delivery (from verify):
+  - pr2 (635 gross) and pr4 (1,262 gross churn) exceed the 400-line review budget — cohesive
+    units, no `size:exception` claimed; the documented split point for pr4 is after task 4.2
+    (guards), and the pre-drafted W4-over-budget paragraph above travels into the pr4 PR
+    description.
+  - The pr5 PR description should mention the two disclosed test-only commits riding the branch
+    beyond the docs work unit: `93d1d33` (acceptance pins) and `ef42710` (gate hardening).
