@@ -6,7 +6,7 @@ import { serveVault, type ServeOptions } from "../../mcp/server.js";
  * NEVER interactive (RFC §7.2): a missing/invalid vault fails fast with
  * an `AppError`, never a prompt — `setup` is the interactive surface,
  * this command is not. `--vault` optionally overrides the resolved vault
- * (flag → `SUPERMEMORY_VAULT` → `vaults.default`).
+ * (flag → `SUPERMEMORY_VAULT` → the project's `supermemory.json`).
  */
 
 export function registerServeCommand(
@@ -18,7 +18,7 @@ export function registerServeCommand(
     .description("Boot the MCP server over stdio for the resolved vault.")
     .option(
       "--vault <path>",
-      "vault path or configured name (overrides SUPERMEMORY_VAULT / vaults.default)",
+      "vault path (overrides SUPERMEMORY_VAULT / the project's supermemory.json)",
     )
     .action(async (opts: { vault?: string }) => {
       await serve({ vaultFlag: opts.vault });
