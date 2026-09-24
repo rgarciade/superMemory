@@ -209,3 +209,191 @@ diff on this branch).
 - **Transient full-run flake (honest report).** The first post-deletion full run showed 6 failures in `test/sync/engine.test.ts` / `sync/git.test.ts` / `sync/resolve.test.ts` — modules this commit never touched; the instructed single rerun was green, then the gate ran green twice consecutively. Lineage matches the parallel-git flake recorded at W3.
 - **`ERROR_CODES` registry ripple in 4.2's commit:** the exhaustive registry pin required the new code the same commit (spec mandates one code added, none removed). Same category as W3's input ripples.
 - Stale `--vault` help text in sync/resolve ("overrides SUPERMEMORY_VAULT / vaults.default") remains deliberately untouched — W5 docs sweep, per the W3 note.
+
+## W5 slice (PR 5) — RFC v1.3 + docs sweep (Phase 5 tasks 5.1–5.3)
+
+Run on `add-project-config/pr5-rfc-docs` (stacked on W4 tip `5b63067`). Delivery:
+`auto-chain` / `stacked-to-main` (session-resolved; not re-decided). Scope honored:
+Phase 5 ONLY — docs + the one sanctioned help-text touch; no engine or behavior
+changes. Strict TDD is inapplicable to this slice by its own definition (docs-only
+work unit; the sanctioned touch is a user-facing string reword with no pinning
+test — grep over `test/` confirmed zero pins before editing, so nothing to update;
+verification is the gate evidence below).
+
+### Completed tasks
+
+| Task | Commit | Summary |
+|---|---|---|
+| 5.1 | `87d7f75` | The 15-location RFC edit plan executed as ONE atomic docs commit (`docs(rfc): v1.3 — per-project supermemory.json replaces the global config`, 80+/60−): (1) header → `Draft v1.3 (per-project supermemory.json replaces the global config; legacy .memory/local.json superseded)`; (2) §1 "tiny global config of pointers" → "tiny per-project config file"; (3) §3 diagram — the `~/.config/supermem/config.json` box replaced by `AGENT PROJECT / supermemory.json / (gitignored) / vault pointer + author identity`, arrow reversed to "MCP reads at boot from the nearest work-tree root" (VAULT/Git-remote boxes preserved byte-for-byte, shifted down 3 lines for the taller config box); (4) invariant 2 reworded to "writes exactly: the gitignored `supermemory.json` (plus the optional committed `supermemory.example.json` and one `.gitignore` line) inside the agent project, and logs"; (5) §4.1 `local.json` layout line deleted (tree stays valid); (6) §5.1 re-anchored — `<path\|name>` → `<path>`, multi-vault marked M2 re-anchored on per-project files ("there is no global registry"), `vault add` records in the project's `supermemory.json`, `projects_list`/`vault_register` rows marked *(M2 design intent)*; (7) §6.3 author clause → "(from the project config's `author`, falling back to inherited Git identity)" verbatim with the sync-ladder delta; (8) §7.2 walkthrough rewritten (run INSIDE the agent project; guards refusing $HOME/non-work-tree before any prompt; vault re-prompted until boot validation passes with 5-invalid-attempt abort writing nothing; author defaults from the vault repo's git config; the three artifacts — gitignored config + example-when-absent + idempotent gitignore line; `install --client`/`vault add` marked M2, "same global config" wording gone; never-interactive/pinned-error paragraph kept verbatim); (9) §7.5 → "The per-project `supermemory.json` survives updates (it lives in the project)… `npx supermemory@latest` remains a complete update"; (10) §8 chain → "`serve --vault <path>` serves exactly one vault; `serve --multi` (M2)… With no flag: `SUPERMEMORY_VAULT` env → `supermemory.json` at the nearest Git work-tree root of the launch directory"; (11) §8 jsonc pair — gitignored flat `supermemory.json` (vault + author) + committed `supermemory.example.json` (placeholder `"/absolute/path/to/your/vault"`, never author — matches `EXAMPLE_CONFIG_CONTENT` bytes); (12) `SUPERMEMORY_CONFIG_DIR` table row deleted; (13) never-implemented `~/.config/supermemory/.env` loading sentence dropped, vault `config.yml` + source-repo `.env` dogfooding note kept; (14) §10 verify-only — "outside §3's two exceptions" still tracks the reworded invariant (config artifacts + logs = two exceptions); NO change; (15) §12 verify-only — M1 bullet stays true; NO change. Anchors were re-located by grep (RFC drifted a few lines vs the v1.2 capture; content matched everywhere — intent adapted, anchors re-verified before each edit). Archived change docs untouched. |
+| 5.2 | (verification-only, no commit) | Sweep executed; **no README/docs changes found beyond 5.1's RFC commit**: `docs/` contains only `RFC.md` (plus this change's own openspec artifacts); `README.md` is a 7-line stub pointing at the RFC with zero config-mechanism language, no onboarding flow to fix, no `SUPERMEMORY_CONFIG_DIR`/`vaults.default`/`local.json`-as-plan occurrences; post-edit grep over `docs/` + `README.md` shows only the sanctioned v1.3 header supersession note and the §5.1 "no global registry" negation. Task 5.2's own conditional ("its own commit **if changes are found**") resolves to no commit; evidence recorded here per the W1–W4 gate-task precedent. Cleanup/rollback note verified present via §7.2 (delete `supermemory.json` + drop one gitignore line is the inverse of the three-artifact write set). |
+| (sanctioned touch) | `d1d239a` | The W3/W4-deferred stale `--vault` help text fix (`fix(cli)`, 4+/4−): `"vault path or configured name (overrides SUPERMEMORY_VAULT / vaults.default)"` → `"vault path (overrides SUPERMEMORY_VAULT / the project's supermemory.json)"` in sync.ts + resolve.ts **and serve.ts** — serve carried the identical stale string plus a stale chain comment (`flag → SUPERMEMORY_VAULT → vaults.default`); the W3 sweep note had listed only sync/resolve. No test pins these strings (zero hits in `test/`), so no test updates. See deviations. |
+| 5.3 | (gate, no commit) | W5 slice gate — all green, see verification below. Gate-only task: the docs commit records it (W1–W4 precedent). |
+
+### Files changed (W5 slice)
+
+- Modified: `docs/RFC.md` (80+/60− — the 15-location plan), `src/cli/commands/sync.ts`, `src/cli/commands/resolve.ts`, `src/cli/commands/serve.ts` (1 line each, sanctioned help-text reword)
+- Docs: `openspec/changes/add-project-config/tasks.md` (5.1–5.3 ticked), this file
+
+### Verification evidence (task 5.3 slice gate)
+
+- **Diff confinement**: `git diff add-project-config/pr4-setup-rework --stat` → exactly `docs/RFC.md` (140 lines) + the three 1-line cli help files (6 lines total) — docs-only except the sanctioned touch; openspec docs ride in this metadata commit per chain convention.
+- **Grep gates**: `SUPERMEMORY_CONFIG_DIR` over `src/`, `test/`, `docs/`, `README.md` → **zero hits**; `vaults.default` / "configured name" over the same surface → **zero hits** (the deleted mechanism has no remaining reference in code, tests, or docs); "global config" in `src/` only in the AD-4 pinned legacy hint (disclosed design exception) and negating comments — unchanged from the W4 gate state.
+- **One chain story**: RFC §3 diagram (MCP reads `supermemory.json` at boot from the nearest work-tree root), §8 chain (flag → env → project file), and invariant 2 (writes the three artifacts inside the agent project) all describe the same `resolveVaultPath`/`findProjectRoot` implementation; §6.3's author clause matches the sync-ladder delta verbatim.
+- `npx vitest run` → run 1: 5 failures in `test/cli/commands/resolve.test.ts` (1) + `test/sync/resolve.test.ts` (4) — the known parallel-git flake lineage (W3/W4 notes); focused rerun of the two suites **18/18 green**, then the instructed single full rerun: **55 files / 535 tests, all passing**.
+- `npm run typecheck` → clean. `npm run build` → clean.
+- Review budget: slice churn **164 gross (84+/80−)** vs ~180 forecast — inside; lowest-risk slice in the chain.
+- Branch `add-project-config/pr5-rfc-docs`; conventional commits `87d7f75` (docs) + `d1d239a` (fix) + this docs commit; nothing pushed (maintainer-owned delivery); `main` untouched.
+
+### Notes & deviations (W5)
+
+- **serve.ts joined the sanctioned touch (disclosed scope addition).** The parent instruction and W3 note named sync.ts/resolve.ts; the grep before editing found the *identical* stale string and a stale chain comment in serve.ts's `--vault` option. Leaving it would have kept a `vaults.default` reference alive in the very surface the 5.3 gate greps and contradicted the change's success criteria ("no user-visible 'global config' mechanism strings anywhere in code"). Included as the same one-line reword; disclosed here for the reviewer. Net: 3 files, +4/−4.
+- **Anchor drift handled per instruction.** Design's line numbers were captured at RFC v1.2; the file had drifted slightly (e.g. §7.2 block actually at ~485-497, §5.1 at ~341). Every anchor's current wording was read and verified before editing; where the plan's shorthand and reality differed (e.g. §5.1's `<path|name>` → `<path>` ripple into the launch sentence), intent was preserved and adapted, never broadened.
+- **Diagram restructure note.** The new AGENT PROJECT box is 2 content lines taller than the old global-config box, so the VAULT/Git-remote column shifted down 3 lines; both boxes' inner rows are byte-preserved from the original. The MCP→config arrowhead reversed (`◀`) to read "config flows into MCP" with the boot-time discovery label stacked in the gutter.
+- **Task 5.2 produced no commit** — its own wording makes the commit conditional on findings; the sweep is evidenced above. This mirrors the W1–W4 "gate tasks carry no empty commit" convention.
+- **535/535 sanity holds at the W5 tip** — the docs slice changed no behavior (help strings + markdown only), matching the parent's expectation for the Phase 6 final gate.
+
+## Phase 6 — Final phase gate (task 6.1; run on `add-project-config/pr5-rfc-docs`)
+
+Closing gate for the change. Delivery remains `auto-chain` / `stacked-to-main` (session-resolved);
+nothing pushed, `main` untouched. One new test commit landed (`test(p6)` `93d1d33`, see
+acceptance-case (a) below); the gate's own record rides in this docs commit per the W1–W5
+gate-task convention.
+
+### Double-green protocol (task 6.1, verbatim summaries)
+
+Both runs on the final tree (after `93d1d33`); identical summaries, no flake — **two consecutive
+greens, PASS**:
+
+```text
+ RUN 1  > vitest run        (15:22:15)
+ Test Files  55 passed (55)
+      Tests  537 passed (537)
+    Duration  39.27s
+
+ RUN 2  > vitest run        (15:23:02)
+ Test Files  55 passed (55)
+      Tests  537 passed (537)
+    Duration  37.65s
+```
+
+Both runs print one identical stray stderr line (`error: missing required argument 'value'`) — a
+deterministic artifact of a commander `exitOverride` register test's help/error path, present in
+every full run of this suite (including W4/W5 gates); not a failure and not a flake. The known
+resolve-area parallel-git flake lineage did NOT fire in either gate run.
+
+- `npm run typecheck` → clean (exit 0). `npm run build` → clean (exit 0).
+
+### First-class acceptance cases — located, named, confirmed (all green)
+
+| Case | Verdict | Exact test names and files |
+|---|---|---|
+| (a) subdir-launch resolution — setup at root; serve/sync/resolve from a nested subdir resolve the root's vault | **serve half covered (W3); setup half covered (W4); sync/resolve halves were NOT covered → 2 new tests written RED-first** | • `test/mcp/server.test.ts` → "resolves the root project file from a subdirectory launch" (chain: `resolveVaultPath`, `basePath: subdir` → root's vault) and "fails fast with the pinned message when the launch tree configures no vault" (serveVault boot) • `test/config/project-config.test.ts` → "resolves the root from a subdirectory (AD-1 discovery)" • `test/cli/commands/setup.test.ts` → "writes all three artifacts at the WORK-TREE ROOT when launched from a subdirectory" (the setup half) • **NEW** `test/cli/commands/sync.test.ts` → "resolves the root project file's vault from a subdirectory launch" • **NEW** `test/cli/commands/resolve.test.ts` → "resolves the root project file's vault from a subdirectory launch" |
+| (b) twice-setup gitignore idempotence — two runs ⇒ exactly one `supermemory.json` line, every other byte unchanged | **covered (W4)** | `test/cli/commands/setup.test.ts` → "gitignore append is idempotent across a second run — exactly one line" (asserts `raw === "node_modules/\\nsupermemory.json\\n"` — the whole-file byte pin — and exactly one matching line); sibling pins: "appends the gitignore line when missing; every other entry stays byte-unchanged" + the CRLF N7 port |
+| (c) corrupt-file fail-safe — truncated `{ "vault": ` ⇒ exactly `No vault configured. Run: supermemory setup`, no parse crash, nothing partially honored | **covered (W2/W3)** | `test/config/project-config.test.ts` → "invalid JSON (truncated `{ \"vault\": `) → undefined" (loader never crashes, nothing honored) and "corrupt file fails safe to unconfigured — the same pinned error, no parse crash" (the shared startup resolver → byte-exact message); `test/mcp/server.test.ts` → "fails with the byte-exact literal spec wording, independent of the imported constant" (the verbatim literal, history-documented pin) |
+
+**RED evidence for the two new tests (case a, sync/resolve halves).** Against
+`add-project-config/pr2-project-config` (the pre-W3 tree, throwaway worktree, removed after the
+check) both fail: sync times out on the old global-config resolver; resolve hits `LOCK_HELD` at the
+old boot — the `basePath` plumbing they pin did not exist. On the current tree both pass. Landed as
+one commit: `93d1d33` `test(p6): pin the sync/resolve subdir-launch acceptance case (a) end-to-end`
+(2 files, +67). Focused confirmation on the final tree: 2 files / 2 tests passed. The tests are
+discriminating by construction: if `basePath` stopped flowing into the chain, resolution falls to
+the ambient cwd (this repo's root — not a project) and boot fails `NO_VAULT_CONFIGURED`.
+Focused acceptance-area run on the final tree: **5 files / 85 tests, all passing** (`server.test.ts`
++ `project-config.test.ts` + `setup.test.ts` + `sync.test.ts` + `resolve.test.ts`).
+
+### Chain verification — five stacked branches
+
+`git merge-base --is-ancestor` confirms the stack order pr1←base, pr2←pr1, pr3←pr2, pr4←pr3,
+pr5←pr4 (all YES). Per-branch diffs are confined to their slice's files (+ the openspec docs each
+docs commit carries, per chain convention):
+
+| Branch (PR) | vs parent | Slice files (openspec docs elided) | Green gate recorded |
+|---|---|---|---|
+| `add-project-config/pr1-append-lines` | `add-m1-core/pr3-sync-engine` | `src/util/append-lines.ts` +114, `test/util/append-lines.test.ts` +160, `src/cli/commands/init.ts` −103/+17 → 359+/103− | 1.3 (491/491 ×2; typecheck+build clean) |
+| `add-project-config/pr2-project-config` | pr1 | `src/config/project-config.ts` +163, `test/config/project-config.test.ts` +396, `test/helpers/project.ts` +76 → 687+/9− | 2.3 (520/520 ×2) |
+| `add-project-config/pr3-consumer-rewiring` | pr2 | `src/mcp/server.ts`, `src/cli/commands/sync.ts`, `src/cli/commands/resolve.ts` + the 3 migrated test files + `test/p3/gate.test.ts` → 416+/110−; **`src/sync/engine.ts`+`git.ts` diff: 0 lines** | 3.4 (526/526) |
+| `add-project-config/pr4-setup-rework` | pr3 | `src/cli/commands/setup.ts` +206/−, `src/config/env.ts`, `src/util/errors.ts`, DELETED `src/config/global-config.ts` (−71) + `test/config/global-config.test.ts` (−89), `test/cli/commands/setup.test.ts` +795-ish rewrite, env/p1/errors test trims → 906+/421−; **engine/git diff: 0 lines** | 4.6 (535/535 ×2) |
+| `add-project-config/pr5-rfc-docs` | pr4 | `docs/RFC.md` 140 lines, `serve.ts`/`sync.ts`/`resolve.ts` 1-line help rewords (sanctioned touch), + `test(p6)`'s `sync.test.ts`/`resolve.test.ts` additions → 196+/67− | 5.3 (535/535 after flake-rerun) + this 6.1 gate (537/537 ×2) |
+
+Each slice's own gate ran green independently on its branch before the next slice stacked
+(recorded in the per-slice sections above); work units are one-conventional-commit-per-task with
+the documented RED-commit convention (test-first commits land observed-RED).
+
+**W4-over-budget note for the pr4 PR description (maintainer-owned delivery).** No PRs are created
+by the agent (nothing pushed). When the pr4 PR is opened, its description must carry: "≈530 gross
+forecast / 1,262 measured cumulative branch churn (847+/415−) — one cohesive unit (`runSetup`
+rework + `setup.test.ts` rewrite + atomic module deletion); the documented split point is after
+task 4.2 (guards); no `size:exception` claimed — reviewer decides at review." Full accounting in
+the W4 section above.
+
+### Task 0.1 verification (ticked with this record)
+
+Base verified: `add-m1-core/pr3-sync-engine` contains the archived add-m1-core work;
+`merge-base(base, pr1) = 24fe9cb` = the base branch tip, so pr1 = base + W1 commits only (no
+Phase-0 commits); all five branch-ancestry checks YES; `git status` clean at Phase 0 (and now).
+Disclosure: tasks.md 0.1 names tip `11199e9`, captured at planning time; the base branch's actual
+tip is `24fe9cb` (the change's own planning docs commit, `chore: plan the add-project-config
+change` family) — the base condition (archived work present; pr1 cut from the tip) holds against
+the real tip; the hash in the task text is stale, not the chain.
+
+### Closing state
+
+- `git status` → working tree clean (no tracked changes); two untracked LOCAL-only artifacts
+  (`.DS_Store`, `.idea/`) predate the gate and are intentionally not committed or gitignored by
+  this change (no code/doc diff may ride the gate record).
+- Final gate commits on pr5: `93d1d33` (test(p6)) + this docs commit; branch tip history:
+  `87d7f75` (docs RFC v1.3) → `d1d239a` (fix help text) → `cd39a98` (W5 record) → `93d1d33`
+  → this record.
+- Nothing pushed; no PRs; `main` untouched throughout.
+
+**PR-5 implementation complete pending verify+delivery.**
+
+### Gate hardening (post-6.1 verification)
+
+- The 6.1 double-green claim above was invalidated by independent parent verification: consecutive
+  post-gate runs produced 1F, 3F, 2F, 8F — all `test/sync`-area timeouts at exactly the 5000ms
+  boundary, different tests each run, load-dependent under 55-way worker parallelism with real git
+  subprocesses (the registered add-m1-core verify finding #3 lineage — previously LOW, escalating).
+- Fix: commit `ef42710` — per-file `vi.setConfig({ testTimeout: 20_000 })` on the seven git-heavy
+  suites (sync resolve/engine/git/lock, p3 gate, CLI sync/resolve); pure-CPU files deliberately
+  untouched; zero production-code changes.
+- Superseding evidence: 537/537 twice consecutively under real machine load, typecheck clean. The
+  gate verdict stands WITH this hardening as part of the change; the pre-hardening double-green
+  claim above is retracted.
+
+### Post-gate UX addition: setup vault-path tab completion
+
+- Maintainer request during dogfooding: Tab directory-completion on the wizard's vault-path
+  prompt. `@inquirer/input` 5.1.6 (latest) has no completer support, so a thin `directoryInput`
+  prompt was built on `@inquirer/core` 12.0.3 (promoted to direct dependency): pure
+  `completeVaultPath(fragment, cwd, homeDir)` helper (unique match drills deeper with trailing
+  slash; ambiguity renders up to 8 rows + longest-common-prefix extension; `~` via injected
+  home; dotfiles opt-in) + console-edge wiring in `consolePrompts.vaultPath`.
+- PromptPort/scriptedPort seam untouched; 11 new helper tests; full suite 548/548 across 56
+  files; typecheck + build clean. Commits: setup completion + lockfile promotion on
+  `add-project-config/pr5-rfc-docs`.
+
+---
+
+## Archive record (appended at archive time, 2026-09-24)
+
+- Change archived at 2026-09-24 on branch add-project-config/pr5-rfc-docs; verify PASS-WITH-NOTES
+  (zero blockers).
+- Canonical specs synced at archive time (parent-instructed; no separate sync phase ran): NEW
+  `openspec/specs/project-config/spec.md` composed wholesale from the delta (7 requirements / 21
+  scenarios, byte-identical); MODIFIED `openspec/specs/boot-validation/spec.md` — requirement
+  "Fail-fast actionable errors" replaced in place (ownership clause + project-file source list;
+  the other canonical requirement and all other scenarios byte-identical, diff-verified vs HEAD);
+  MODIFIED `openspec/specs/sync-ladder/spec.md` — requirement "Human authorship with trailer
+  provenance" replaced in place (project-config author source + the new degradation scenario;
+  the other 10 requirements byte-identical, diff-verified vs HEAD). Delta-only
+  `(Previously: …)` change-notes stay in the archived deltas; canonical specs carry current
+  behavior. Details in `archive-report.md`.
+- Carry into delivery (from verify):
+  - pr2 (635 gross) and pr4 (1,262 gross churn) exceed the 400-line review budget — cohesive
+    units, no `size:exception` claimed; the documented split point for pr4 is after task 4.2
+    (guards), and the pre-drafted W4-over-budget paragraph above travels into the pr4 PR
+    description.
+  - The pr5 PR description should mention the two disclosed test-only commits riding the branch
+    beyond the docs work unit: `93d1d33` (acceptance pins) and `ef42710` (gate hardening).

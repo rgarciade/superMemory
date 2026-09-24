@@ -10,6 +10,9 @@ import {
   createRemote,
 } from "../helpers/create-remote.js";
 
+// Load-sensitive real-git timeouts under parallel workers (add-m1-core verify finding #3).
+vi.setConfig({ testTimeout: 20_000 });
+
 // Task 3.3 [RED first]: git.ts — typed thin simple-git wrapper exposing
 // exactly the operations the sync engine needs (design §4.1): status,
 // add, commit with human author + trailers, pull --rebase --autostash,

@@ -30,7 +30,7 @@ Before the server serves any tool or any vault operation runs, the system SHALL 
 
 ### Requirement: Fail-fast actionable errors
 
-Boot validation SHALL be fail-fast: the first failed check aborts startup with an error that names what failed and gives a concrete next action. The server MUST NOT serve a partial tool catalog or operate on an invalid vault. When no vault is configured at all, the system SHALL fail with `No vault configured. Run: supermemory setup`.
+Boot validation SHALL be fail-fast: the first failed check aborts startup with an error that names what failed and gives a concrete next action. The server MUST NOT serve a partial tool catalog or operate on an invalid vault. When no vault is configured at all, the system SHALL fail with `No vault configured. Run: supermemory setup`. The set of vault sources and their precedence — the `--vault` launch flag, then `SUPERMEMORY_VAULT`, then the project config file `supermemory.json` — SHALL be owned by the `project-config` capability; boot validation validates whichever path that chain resolves and MUST NOT consult any other source (in particular, no global config).
 
 #### Scenario: Missing rules.md yields a located, actionable message
 
@@ -40,6 +40,6 @@ Boot validation SHALL be fail-fast: the first failed check aborts startup with a
 
 #### Scenario: Unconfigured environment yields the setup command
 
-- GIVEN no vault path resolvable from the launch flag, `SUPERMEMORY_VAULT`, or global config
+- GIVEN no vault path resolvable from the launch flag, `SUPERMEMORY_VAULT`, or the project config file `supermemory.json` (for example, a project root where the file was never created)
 - WHEN the server or CLI starts
-- THEN it fails fast with `No vault configured. Run: supermemory setup` and serves nothing
+- THEN it fails fast with exactly `No vault configured. Run: supermemory setup` and serves nothing

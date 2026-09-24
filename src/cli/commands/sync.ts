@@ -50,7 +50,7 @@ export function registerSyncCommand(
     .description("Run one full sync cycle now: commit pending writes, pull, push.")
     .option(
       "--vault <path>",
-      "vault path or configured name (overrides SUPERMEMORY_VAULT / vaults.default)",
+      "vault path (overrides SUPERMEMORY_VAULT / the project's supermemory.json)",
     )
     .action(async (opts: { vault?: string }) => {
       // The outcome report is the command's product: stdout (only `serve`

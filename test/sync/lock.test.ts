@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -9,6 +9,9 @@ import {
 } from "../../src/sync/lock.js";
 import { MemoryLockRegistry } from "../helpers/memory-lock-registry.js";
 import { createTestVault } from "../helpers/create-test-vault.js";
+
+// Load-sensitive real-git timeouts under parallel workers (add-m1-core verify finding #3).
+vi.setConfig({ testTimeout: 20_000 });
 
 // Task 3.4 [RED first]: lock.ts — SyncLock/LockHandle + PidfileLock at
 // .memory/cache/supermemory-sync.lock (OD-4): live-pid check (ESRCH-safe),

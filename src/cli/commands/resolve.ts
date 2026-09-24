@@ -90,7 +90,7 @@ export function registerResolveCommand(
     .description("Guided conflict resolution: merge both sides of an open conflict.")
     .option(
       "--vault <path>",
-      "vault path or configured name (overrides SUPERMEMORY_VAULT / vaults.default)",
+      "vault path (overrides SUPERMEMORY_VAULT / the project's supermemory.json)",
     )
     .action(async (opts: { vault?: string }) => {
       // The launch directory is injected HERE — the one ambient edge (AD-6).
