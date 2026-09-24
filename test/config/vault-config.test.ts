@@ -114,3 +114,36 @@ describe("loadVaultConfig", () => {
     expect(config).toEqual({});
   });
 });
+
+describe("project-config overrides (issue #5)", () => {
+  it("project overrides beat config.yml and rules", () => {
+    const tunables = resolveSyncTunables(
+      env({}),
+      { sync: { sync_interval_minutes: 30, debounce_seconds: 60 } },
+      fixtureRules,
+      { syncIntervalMinutes: 7, debounceSeconds: 12 },
+    );
+    expect(tunables.intervalMs).toBe(7 * MINUTE_MS);
+    expect(tunables.debounceMs).toBe(12 * SECOND_MS);
+  });
+
+  it("env still beats the project overrides", () => {
+    const tunables = resolveSyncTunables(
+      env({ SUPERMEMORY_DEBOUNCE_SECONDS: "20" }),
+      undefined,
+      fixtureRules,
+      { syncIntervalMinutes: 7, debounceSeconds: 12 },
+    );
+    expect(tunables.debounceMs).toBe(20 * SECOND_MS);
+    expect(tunables.intervalMs).toBe(7 * MINUTE_MS);
+  });
+
+  it("absent or empty overrides keep the defaults", () => {
+    const bare = { ...fixtureRules, git: {} };
+    for (const project of [undefined, {}]) {
+      const tunables = resolveSyncTunables(env({}), undefined, bare, project);
+      expect(tunables.intervalMs).toBe(15 * MINUTE_MS);
+      expect(tunables.debounceMs).toBe(45 * SECOND_MS);
+    }
+  });
+});

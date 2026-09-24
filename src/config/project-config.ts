@@ -24,10 +24,49 @@ export const EXAMPLE_CONFIG_FILENAME = "supermemory.example.json";
 export const EXAMPLE_CONFIG_CONTENT =
   '{\n  "vault": "/absolute/path/to/your/vault"\n}\n';
 
-/** Flat per-project shape (spec: vault REQUIRED absolute; author OPTIONAL). */
+/** Accepted range (inclusive) for the debounce window, in whole seconds. */
+export const DEBOUNCE_SECONDS_BOUNDS = { min: 1, max: 3600 } as const;
+/** Accepted range (inclusive) for the pull interval, in whole minutes. */
+export const SYNC_INTERVAL_MINUTES_BOUNDS = { min: 1, max: 1440 } as const;
+
+/**
+ * Flat per-project shape (spec: vault REQUIRED absolute; author OPTIONAL).
+ * `debounceSeconds` / `syncIntervalMinutes` are OPTIONAL sync timing
+ * overrides; absent ⇒ the built-in defaults (45 s / 15 min) apply.
+ */
 export interface ProjectConfig {
   vault: string;
   author?: { name: string; email: string };
+  debounceSeconds?: number;
+  syncIntervalMinutes?: number;
+}
+
+/** The sync timing overrides a project config can carry. */
+export interface ProjectSyncOverrides {
+  debounceSeconds?: number;
+  syncIntervalMinutes?: number;
+}
+
+function isIntegerInRange(
+  value: unknown,
+  bounds: { min: number; max: number },
+): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= bounds.min &&
+    value <= bounds.max
+  );
+}
+
+/** True for a whole number of seconds within DEBOUNCE_SECONDS_BOUNDS. */
+export function isValidDebounceSeconds(value: unknown): value is number {
+  return isIntegerInRange(value, DEBOUNCE_SECONDS_BOUNDS);
+}
+
+/** True for a whole number of minutes within SYNC_INTERVAL_MINUTES_BOUNDS. */
+export function isValidSyncIntervalMinutes(value: unknown): value is number {
+  return isIntegerInRange(value, SYNC_INTERVAL_MINUTES_BOUNDS);
 }
 
 /** The project author as a CommitAuthor-compatible value (structural — no sync/ import). */
@@ -106,7 +145,18 @@ export async function loadProjectConfig(
   }
 
   const author = parseOptionalAuthor(record["author"]);
-  return author === undefined ? { vault } : { vault, author };
+  const debounceSeconds = record["debounceSeconds"];
+  const syncIntervalMinutes = record["syncIntervalMinutes"];
+  // Invalid timing overrides are dropped individually (fail-safe): the
+  // vault is still honored and the built-in default applies.
+  return {
+    vault,
+    ...(author !== undefined ? { author } : {}),
+    ...(isValidDebounceSeconds(debounceSeconds) ? { debounceSeconds } : {}),
+    ...(isValidSyncIntervalMinutes(syncIntervalMinutes)
+      ? { syncIntervalMinutes }
+      : {}),
+  };
 }
 
 /**
@@ -118,6 +168,20 @@ export function projectAuthor(
   config: ProjectConfig | undefined,
 ): ProjectAuthor | undefined {
   return config === undefined ? undefined : parseOptionalAuthor(config.author);
+}
+
+/** The sync timing overrides of a loaded config; `{}` when none (defaults apply). */
+export function projectSyncOverrides(
+  config: ProjectConfig | undefined,
+): ProjectSyncOverrides {
+  return {
+    ...(config?.debounceSeconds !== undefined
+      ? { debounceSeconds: config.debounceSeconds }
+      : {}),
+    ...(config?.syncIntervalMinutes !== undefined
+      ? { syncIntervalMinutes: config.syncIntervalMinutes }
+      : {}),
+  };
 }
 
 function parseOptionalAuthor(raw: unknown): ProjectAuthor | undefined {

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSyncScheduler, type SchedulerDeps } from "../../src/sync/scheduler.js";
 import { SystemTimerPort } from "../../src/util/clock.js";
-import type { SyncTunables } from "../../src/config/vault-config.js";
+import { resolveSyncTunables, type SyncTunables } from "../../src/config/vault-config.js";
+import type { RulesModel } from "../../src/rules/types.js";
 import { ManualTimerPort } from "../helpers/manual-timer-port.js";
 
 // Task 3.9 [RED first]: scheduler.ts — trailing-edge debounce (default
@@ -196,4 +197,35 @@ describe("createSyncScheduler — production wiring (SystemTimerPort + fake time
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("createSyncScheduler — project-config timings (issue #5)", () => {
+  const rules = { git: {} } as unknown as RulesModel;
+  const noEnv = { get: () => undefined };
+  const everyDelays = (t: ManualTimerPort): number[] =>
+    t.timers.filter((x) => x.kind === "every").map((x) => x.delayMs);
+
+  it("defaults (no overrides) arm 15 min interval and 45 s debounce", () => {
+    const { timers, scheduler } = harness({
+      tunables: () => resolveSyncTunables(noEnv, undefined, rules, {}),
+    });
+    scheduler.start();
+    scheduler.notifyWrite();
+    expect(everyDelays(timers)).toEqual([15 * 60_000]);
+    expect(timers.oneShotDelays()).toEqual([45_000]);
+  });
+
+  it("custom project values are honored by the scheduler", () => {
+    const { timers, scheduler } = harness({
+      tunables: () =>
+        resolveSyncTunables(noEnv, undefined, rules, {
+          debounceSeconds: 10,
+          syncIntervalMinutes: 5,
+        }),
+    });
+    scheduler.start();
+    scheduler.notifyWrite();
+    expect(everyDelays(timers)).toEqual([5 * 60_000]);
+    expect(timers.oneShotDelays()).toEqual([10_000]);
+  });
 });

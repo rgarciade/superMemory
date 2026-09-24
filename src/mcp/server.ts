@@ -8,6 +8,8 @@ import { validateBoot } from "../boot/validate-boot.js";
 import { loadVaultConfig, resolveSyncTunables } from "../config/vault-config.js";
 import {
   loadProjectConfig,
+  projectSyncOverrides,
+  type ProjectSyncOverrides,
   projectAuthor,
   resolveVaultPath,
 } from "../config/project-config.js";
@@ -194,6 +196,8 @@ export interface SyncStackOptions {
   env: EnvSource;
   /** The human identity — git author of sync commits (design §4.3). */
   author?: CommitAuthor;
+  /** Project-config sync timing overrides (issue #5); absent ⇒ defaults. */
+  projectSync?: ProjectSyncOverrides;
   /** Which actor this engine runs as (OD-4). Default "server". */
   owner?: LockOwner;
 }
@@ -219,7 +223,7 @@ export async function createVaultSyncStack(opts: SyncStackOptions): Promise<Sync
   const paths = vaultPaths(opts.vaultPath);
   const vaultConfig = await loadVaultConfig(paths.configPath);
   let currentRules = opts.rules;
-  const tunables = () => resolveSyncTunables(opts.env, vaultConfig, currentRules);
+  const tunables = () => resolveSyncTunables(opts.env, vaultConfig, currentRules, opts.projectSync);
 
   const engine = createSyncEngine({
     vaultPath: opts.vaultPath,
@@ -232,7 +236,7 @@ export async function createVaultSyncStack(opts: SyncStackOptions): Promise<Sync
     git: createGitClient(opts.vaultPath),
     index: createVaultIndexPort(opts.store, opts.vaultPath, () => currentRules),
     reloadRules: () => loadRules(paths.rulesPath),
-    resolveTunables: (rules) => resolveSyncTunables(opts.env, vaultConfig, rules),
+    resolveTunables: (rules) => resolveSyncTunables(opts.env, vaultConfig, rules, opts.projectSync),
     onRulesReloaded: (rules) => {
       currentRules = rules;
     },
@@ -285,7 +289,8 @@ export async function serveVault(opts: ServeOptions = {}): Promise<void> {
   // AD-7: the boot's commit identity comes from the same project file
   // the chain reads — absent ⇒ undefined ⇒ commits inherit the vault's
   // own Git identity.
-  const author = projectAuthor(await loadProjectConfig(basePath));
+  const projectConfig = await loadProjectConfig(basePath);
+  const author = projectAuthor(projectConfig);
 
   const [store, templates, instructions] = await Promise.all([
     buildIndex(vaultPath, rules),
@@ -302,6 +307,7 @@ export async function serveVault(opts: ServeOptions = {}): Promise<void> {
     clock,
     env,
     author,
+    projectSync: projectSyncOverrides(projectConfig),
     owner: "server",
   });
   const { scheduler } = stack;
