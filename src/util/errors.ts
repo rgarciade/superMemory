@@ -14,7 +14,8 @@ export type AppErrorCode =
   | "SECRETS_BLOCKED"
   | "LOCK_HELD"
   | "CONFLICT_CURATED"
-  | "NO_VAULT_CONFIGURED";
+  | "NO_VAULT_CONFIGURED"
+  | "SETUP_LOCATION_REFUSED";
 
 /** Stable error codes, one entry per module surface (design §1.5). */
 export const ERROR_CODES = {
@@ -25,6 +26,7 @@ export const ERROR_CODES = {
   LOCK_HELD: "LOCK_HELD",
   CONFLICT_CURATED: "CONFLICT_CURATED",
   NO_VAULT_CONFIGURED: "NO_VAULT_CONFIGURED",
+  SETUP_LOCATION_REFUSED: "SETUP_LOCATION_REFUSED",
 } as const satisfies Record<AppErrorCode, AppErrorCode>;
 
 export type AppErrorCodeValue = (typeof ERROR_CODES)[AppErrorCode];
