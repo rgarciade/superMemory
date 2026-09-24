@@ -290,4 +290,36 @@ describe("runSyncCommand (real boot over a hermetic vault + bare remote)", () =>
       await remote.cleanup();
     }
   });
+
+  // Phase 6 gate — first-class acceptance case (a), the sync half:
+  // setup wrote supermemory.json at the WORK-TREE ROOT; sync launched
+  // from a nested subdirectory (no --vault flag) must resolve the
+  // root's vault through AD-1 discovery and complete a real cycle
+  // against it. If basePath stopped flowing into the chain, resolution
+  // would fall back to the ambient cwd (this repo's root — not a
+  // project) and boot would fail with NO_VAULT_CONFIGURED. Hermetic per
+  // suite discipline: the ambient env carries no SUPERMEMORY_VAULT (the
+  // p1 gate pins that), and no test mutates process.env.
+  it("resolves the root project file's vault from a subdirectory launch", async () => {
+    const { vault, remote } = await vaultWithRemoteAndPendingWrite();
+    const project = await makeProjectDir({
+      config: { vault: vault.root },
+      nested: "packages/app",
+    });
+    try {
+      const { io, lines } = captureOut();
+      await runSyncCommand({
+        basePath: project.subdir as string,
+        out: outOf(io),
+      });
+
+      // A full cycle ran against the vault the ROOT config names —
+      // the pending note was committed and pushed to the remote.
+      expect(lines.join("\n")).toMatch(/sync outcome: synced/);
+      expect(lines.join("\n")).toMatch(/pushed: yes/);
+    } finally {
+      await project.cleanup();
+      await remote.cleanup();
+    }
+  });
 });

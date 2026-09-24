@@ -18,6 +18,7 @@ import {
 import type { MergePromptContext, ResolvePromptPort } from "../../../src/sync/resolve.js";
 import { createTestVault, type TestVault } from "../../helpers/create-test-vault.js";
 import { connectVaultToRemote, type RemoteVault } from "../../helpers/remote-vault.js";
+import { makeProjectDir } from "../../helpers/project.js";
 import { MemoryLockRegistry } from "../../helpers/memory-lock-registry.js";
 import { ManualTimerPort } from "../../helpers/manual-timer-port.js";
 
@@ -293,5 +294,39 @@ describe("runResolveCommand (real engine conflict + scripted prompt)", () => {
         prompt: scriptedPrompt(() => null),
       }),
     ).rejects.toBeInstanceOf(AppError);
+  });
+
+  // Phase 6 gate — first-class acceptance case (a), the resolve half:
+  // the project file at the WORK-TREE ROOT names the vault; resolve
+  // launched from a nested subdirectory (no --vault flag) must find it
+  // through AD-1 discovery and run the guided flow against that vault.
+  // If basePath stopped flowing into the chain, resolution would fall
+  // back to the ambient cwd (this repo's root — not a project) and boot
+  // would fail with NO_VAULT_CONFIGURED. Hermetic per suite discipline:
+  // the ambient env carries no SUPERMEMORY_VAULT (the p1 gate pins
+  // that), and no test mutates process.env.
+  it("resolves the root project file's vault from a subdirectory launch", async () => {
+    const { vault, remote } = await conflictedVault();
+    const project = await makeProjectDir({
+      config: { vault: vault.root },
+      nested: "packages/app",
+    });
+    try {
+      const lines: string[] = [];
+      const merged = specNote("SPEC-9", "Merged Nine");
+      await runResolveCommand({
+        basePath: project.subdir as string,
+        out: (line: string) => lines.push(line),
+        prompt: scriptedPrompt(() => merged),
+      });
+
+      expect(lines.join("\n")).toMatch(/resolved/);
+      // The guided flow landed in the vault the ROOT config names.
+      const raw = await readFile(await conflictNotePath(vault), "utf8");
+      expect(raw).toContain("status: resolved");
+    } finally {
+      await project.cleanup();
+      await remote.cleanup();
+    }
   });
 });
