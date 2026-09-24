@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
 import { Command } from "commander";
 import { simpleGit } from "simple-git";
@@ -13,6 +13,9 @@ import type { CycleReport } from "../../../src/sync/engine.js";
 import { createTestVault, type TestVault } from "../../helpers/create-test-vault.js";
 import { connectVaultToRemote, type RemoteVault } from "../../helpers/remote-vault.js";
 import { makeProjectDir } from "../../helpers/project.js";
+
+// Load-sensitive real-git timeouts under parallel workers (add-m1-core verify finding #3).
+vi.setConfig({ testTimeout: 20_000 });
 
 // Task 3.11 [RED first]: `supermemory sync` — a single runCycle('manual'),
 // an outcome report, and NO scheduler start (design §4.2: "the CLI `sync`

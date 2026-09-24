@@ -23,6 +23,9 @@ import { connectVaultToRemote, type RemoteVault } from "../helpers/remote-vault.
 import { MemoryLockRegistry } from "../helpers/memory-lock-registry.js";
 import { ManualTimerPort } from "../helpers/manual-timer-port.js";
 
+// Load-sensitive real-git timeouts under parallel workers (add-m1-core verify finding #3).
+vi.setConfig({ testTimeout: 20_000 });
+
 // P3 phase gate (task 3.14) — the named end-to-end scenarios over the
 // REAL modules (real git over hermetic local bare remotes, real engine,
 // real CLI commands, real composed server over InMemoryTransport; the

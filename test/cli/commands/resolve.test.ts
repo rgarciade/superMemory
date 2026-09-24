@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -21,6 +21,9 @@ import { connectVaultToRemote, type RemoteVault } from "../../helpers/remote-vau
 import { makeProjectDir } from "../../helpers/project.js";
 import { MemoryLockRegistry } from "../../helpers/memory-lock-registry.js";
 import { ManualTimerPort } from "../../helpers/manual-timer-port.js";
+
+// Load-sensitive real-git timeouts under parallel workers (add-m1-core verify finding #3).
+vi.setConfig({ testTimeout: 20_000 });
 
 // Task 3.12 [RED first]: `supermemory resolve` — the CLI entry for the
 // guided flow (3.10, design §4.4 step 5). The command binds the REAL

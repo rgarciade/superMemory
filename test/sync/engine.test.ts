@@ -20,6 +20,9 @@ import { connectVaultToRemote, type RemoteVault } from "../helpers/remote-vault.
 import { MemoryLockRegistry } from "../helpers/memory-lock-registry.js";
 import { ManualTimerPort } from "../helpers/manual-timer-port.js";
 
+// Load-sensitive real-git timeouts under parallel workers (add-m1-core verify finding #3).
+vi.setConfig({ testTimeout: 20_000 });
+
 // Task 3.8 [RED first]: engine.ts — runCycle(trigger) per design §4.1:
 // lock → pre-pull format_version guard → commit pending writes (one
 // commit per write event, secrets lint, human author) → pull --rebase

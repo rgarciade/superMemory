@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile, rm, writeFile } from "node:fs/promises";
@@ -26,6 +26,9 @@ import {
   type ConflictNoteRecord,
   type ResolveOutcome,
 } from "../../src/sync/resolve.js";
+
+// Load-sensitive real-git timeouts under parallel workers (add-m1-core verify finding #3).
+vi.setConfig({ testTimeout: 20_000 });
 
 // Task 3.10 [RED first]: resolve.ts — the guided flow (design §4.4 step
 // 5): list open conflicts from conflict notes; materialize
