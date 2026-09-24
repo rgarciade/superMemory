@@ -1,11 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Command } from "commander";
 import { simpleGit } from "simple-git";
 import { AppError } from "../../../src/util/errors.js";
-import { runSetup, type PromptPort, type SetupResult } from "../../../src/cli/commands/setup.js";
+import {
+  registerSetupCommand,
+  runSetup,
+  type PromptPort,
+  type SetupResult,
+} from "../../../src/cli/commands/setup.js";
 import {
   EXAMPLE_CONFIG_CONTENT,
   EXAMPLE_CONFIG_FILENAME,
@@ -676,5 +682,76 @@ describe("setup completion lines (console edge owns the log; wizard never logs)"
     const out = lines(withoutLegacy);
     expect(out).toHaveLength(1); // completion only
     expect(out.join("\n")).not.toContain("legacy global config");
+  });
+});
+
+describe("registerSetupCommand (commander edge owns the log)", () => {
+  // New-seam tests: the injectable runner + the completion logging land
+  // together in 4.4 (driving the OLD action would run @inquirer on a
+  // non-TTY stdin). The bytes asserted here were RED-pinned in 4.3 via
+  // setupCompletionLines; this pins the ambient-edge injection and the
+  // action-side "exactly one legacy line" wiring.
+  function fakeResult(legacyConfigPath?: string): SetupResult {
+    return {
+      root: "/p",
+      vault: "/v",
+      author: { name: "Raul", email: "raul@example.com" },
+      ...(legacyConfigPath !== undefined ? { legacyConfigPath } : {}),
+    } as SetupResult;
+  }
+
+  async function captureActionLog(result: SetupResult): Promise<{
+    seen: { basePath: string; homeDir: string }[];
+    lines: string[];
+  }> {
+    const program = new Command().exitOverride();
+    const seen: { basePath: string; homeDir: string }[] = [];
+    // Log-level determinism: createLogger reads SUPERMEMORY_LOG_LEVEL at
+    // construction — pin it for this test (save/restore; never for
+    // discovery, so the seam rule is untouched).
+    const savedLevel = process.env["SUPERMEMORY_LOG_LEVEL"];
+    process.env["SUPERMEMORY_LOG_LEVEL"] = "info";
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      registerSetupCommand(program, async (io) => {
+        seen.push(io);
+        return result;
+      });
+      await program.parseAsync(["setup"], { from: "user" });
+      const lines = errSpy.mock.calls.map((c) => String(c[0]));
+      return { seen, lines };
+    } finally {
+      errSpy.mockRestore();
+      if (savedLevel === undefined) {
+        delete process.env["SUPERMEMORY_LOG_LEVEL"];
+      } else {
+        process.env["SUPERMEMORY_LOG_LEVEL"] = savedLevel;
+      }
+    }
+  }
+
+  it("injects the ambient edge and logs EXACTLY ONE legacy line when one is present", async () => {
+    const { seen, lines } = await captureActionLog(
+      fakeResult("/home/.config/supermemory/config.json"),
+    );
+    // The commander action is the ONE ambient edge (AD-2).
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.basePath).toBe(process.cwd());
+    expect(seen[0]?.homeDir).toBe(os.homedir());
+    const legacyLines = lines.filter((l) =>
+      l.includes("legacy global config found at"),
+    );
+    expect(legacyLines).toHaveLength(1);
+    expect(legacyLines[0]).toContain(
+      "legacy global config found at /home/.config/supermemory/config.json — supermemory no longer reads it. You may delete it manually.",
+    );
+    // The completion line keeps the "global config" language out.
+    expect(lines.some((l) => l.includes("setup complete"))).toBe(true);
+  });
+
+  it("logs no legacy line when the result has none", async () => {
+    const { lines } = await captureActionLog(fakeResult());
+    expect(lines.filter((l) => l.includes("legacy global config"))).toHaveLength(0);
+    expect(lines.some((l) => l.includes("setup complete"))).toBe(true);
   });
 });
