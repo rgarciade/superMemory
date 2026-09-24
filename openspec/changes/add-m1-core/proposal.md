@@ -7,7 +7,7 @@ Inputs: `openspec/changes/add-m1-core/explore.md`, `docs/RFC.md` v1.2 (§1–§8
 
 ## Why (Problem & Motivation)
 
-supermemory is specified end-to-end in `docs/RFC.md` v1.2 but does not exist: the repo has zero commits, no `package.json`, no source, no tests. RFC §1–§2 define the product as the *structure layer* over a git-synced Markdown vault — rules-as-markdown ontology, agent-first retrieval, one deterministic sync engine, no editor configuration — and the RFC's own delivery unit for that promise is **M1 "Core (dogfood-ready)" (§12)**: until `init`/`setup`/`serve`/`sync` exist with rules parsing, the six MCP tools, a rebuildable SQLite index, the sync engine with its conflict ladder, and secrets lint, no team (including this one) can validate the core value proposition: agents reading and writing the same validated structure against a real vault. This change delivers exactly that M1 slice and nothing beyond it, establishing the scaffold, conventions, and test infrastructure that M2/M3 will build on.
+supermemory is specified end-to-end in `docs/RFC.md` v1.2 but does not exist: the repo has zero commits, no `package.json`, no source, no tests. RFC §1–§2 define the product as the *structure layer* over a git-synced Markdown vault — rules-as-markdown ontology, agent-first retrieval, one deterministic sync engine, no editor configuration — and the RFC's own delivery unit for that promise is **M1 "Core (dogfood-ready)" (§12)**: until `init`/`setup`/`serve`/`sync` exist with rules parsing, the six MCP tools, an index rebuilt from the vault, the sync engine with its conflict ladder, and secrets lint, no team (including this one) can validate the core value proposition: agents reading and writing the same validated structure against a real vault. This change delivers exactly that M1 slice and nothing beyond it, establishing the scaffold, conventions, and test infrastructure that M2/M3 will build on.
 
 ## Proposed Change
 
@@ -29,14 +29,14 @@ Chain seam: PR-1 from the exploration report.
 - npm package scaffold: single package `supermemory` (`bin` entry, `engines` pinned to Node LTS, ESM/NodeNext), `src/cli`, `src/rules`, plus design-added `src/config` (RFC §8 global config/env resolution) and boot-validation module (RFC §3) — `src/index`/`src/sync`/`src/mcp` directories land with their phases.
 - `rules.md` parsing (v1 format: frontmatter `format_version`, fenced YAML blocks for note types, lifecycle, conflict defaults, git settings) + `{{placeholder}}` template rendering (string interpolation only).
 - CLI `init` (scaffold `.memory/`, templates, `config.yml`, `.gitattributes`, default folders, validate, commit) and `setup` (interactive wizard, validated vault path, author identity, writes global config).
-- Boot validation: directory exists, git repo, `.memory/rules.md` present, not inside the app repo, `format_version` supported; fail-fast with actionable messages. FTS5 capability probe lives here (P1 smoke test also verifies better-sqlite3 ESM interop).
+- Boot validation: directory exists, git repo, `.memory/rules.md` present, not inside the app repo, `format_version` supported; fail-fast with actionable messages. *(As executed, P1 also shipped an FTS5 capability probe; design OD-5 removes SQLite and task 1.20 removes the probe.)*
 - **vitest wiring as an explicit P1 task** (Decision D3).
 
-### Phase 2 (P2) — SQLite index + MCP tool catalog
+### Phase 2 (P2) — In-memory index + MCP tool catalog
 
 Chain seam: PR-2 from the exploration report.
 
-- SQLite derived index under `.memory/cache/` (gitignored, rebuildable): property tables, FTS5, wikilink/`spec_id` link graph (RFC §3–§4, exploration).
+- In-memory index built by parsing the vault at boot, incrementally re-parsed on change (design OD-5): property filters, free-text search, wikilink/`spec_id` link graph, plus the committed `index/` Markdown maps (RFC §3–§4, exploration). No index artifact is persisted.
 - MCP server (`serve --vault`, single-vault mode) with all six M1 tools generated from `rules.md`: `find`, `read_with_context`, `save`, `changes_since`, `sync`, `status` (RFC §5). Schemas strict via zod; tool descriptions embed the team's prose rules. `save` validates against `rules.md` and maintains the spec's Linked Knowledge section. `sync`/`status` return real engine state once P3 lands (thin wiring may stub until then).
 
 ### Phase 3 (P3) — Sync engine + commit grammar + conflict ladder + secrets lint
@@ -56,7 +56,7 @@ Chain seam: PR-3 from the exploration report.
 | `init`, `setup`, `serve`, `sync` commands; boot validation | P1 (`init`/`setup`/validation), P2 (`serve`), P3 (`sync`) |
 | rules.md parsing (v1) + template rendering | P1 |
 | `find` / `read_with_context` / `save` / `changes_since` / `sync` / `status` | P2 (catalog) + P3 (sync tool backed by engine) |
-| SQLite derived index (properties + FTS5 + links), rebuildable | P2 |
+| Derived index (properties + free text + links), rebuilt from the vault | P2 |
 | Sync engine: debounce + interval, pull-rebase, commit grammar, union/ours gitattributes, conflict ladder v1, guided `resolve` | P3 (`.gitattributes` written by `init` in P1) |
 | Secrets lint | P3 |
 
@@ -69,7 +69,7 @@ Mirroring the exploration's spec-set recommendation:
 1. **rules-parsing** — `rules.md` v1 parsing, template rendering, format_version contract surface.
 2. **boot-validation** — vault path validation and fail-fast behavior (shared by `setup` and `serve`).
 3. **tool-catalog** — the six MCP tools generated from rules, zod schemas, Linked Knowledge maintenance.
-4. **index** — derived SQLite index (properties + FTS5 + link graph), rebuildability, cache lifecycle.
+4. **index** — in-memory derived index (properties + free text + link graph), built at boot, incrementally updated, no durable state outside the vault.
 5. **sync-ladder** — sync engine, debounce/interval triggers, commit grammar, conflict ladder, secrets lint, `resolve` flow.
 
 CLI onboarding (`init`/`setup`/`sync` commands) and package scaffold are covered within these capabilities rather than as separate spec deltas; the specs phase may refine the delta boundaries.
@@ -99,7 +99,7 @@ CLI onboarding (`init`/`setup`/`sync` commands) and package scaffold are covered
 ## Risks (carried from exploration)
 
 1. **Review budget**: M1 realistically 2000+ lines with tests vs. a 400-line budget — mitigated by the pre-planned P1/P2/P3 chain seams and the ask-on-risk pause (below).
-2. **better-sqlite3 native install**: pin version, rely on prebuilds, document `npm rebuild` fallback, FTS5 capability probe at boot; smoke-test on Node LTS in P1.
+2. ~~**better-sqlite3 native install**~~ — **retired by design OD-5**: the in-memory index removes the native dependency entirely, so the prebuild/FTS5 failure mode no longer exists. Task 1.20 removes what P1 shipped for it.
 3. **MCP SDK + zod peer incompatibility**: verify the SDK's zod peer range before locking zod 3 vs. 4; pin SDK exact/minor.
 4. **Greenfield convention vacuum**: the design doc must fix layout/module conventions before apply (exploration provides the candidate list).
 5. **Sync concurrency testability**: pidfile lock and debounce need injectable clock/lock seams defined in design.
@@ -108,8 +108,8 @@ CLI onboarding (`init`/`setup`/`sync` commands) and package scaffold are covered
 
 - `npx supermemory init` scaffolds a valid vault (rules, templates, config, `.gitattributes`); `setup` configures a member end-to-end.
 - `serve` boots with full validation and fails fast with actionable messages on every invalid-vault fixture.
-- All six tools operate against a real vault: `find` (properties + FTS5), `read_with_context` (backlinks + linked knowledge), `save` (validated, Linked Knowledge maintained), `changes_since`, `sync`, `status`.
-- The index is rebuildable from vault contents alone; deleting `.memory/cache/` loses nothing.
+- All six tools operate against a real vault: `find` (properties + free text), `read_with_context` (backlinks + linked knowledge), `save` (validated, Linked Knowledge maintained), `changes_since`, `sync`, `status`.
+- The index is built from vault contents alone and persists nothing; restarting reproduces identical query results.
 - Divergent local/remote commits never lose data: rebase aborted cleanly, snapshot branch created, conflict note visible in the vault, `resolve` completes the cycle.
 - Commit messages follow the grammar and are derived deterministically from frontmatter; git author is always the human.
 - Secrets lint blocks committing flagged secrets in every mode.
@@ -119,7 +119,7 @@ CLI onboarding (`init`/`setup`/`sync` commands) and package scaffold are covered
 
 - **CLI library choice** — RFC names none; commander (or similar) to be decided in design.
 - **MCP SDK / zod pinning strategy** — exact pin levels, and zod 3 vs. 4 gated on the SDK's declared peer range.
-- **better-sqlite3 FTS5 probe details** — probe mechanics at boot, failure message wording, rebuild-fallback documentation.
+- ~~**better-sqlite3 FTS5 probe details**~~ — resolved as OD-3 in design, then **withdrawn** when OD-5 replaced the SQLite index with an in-memory one.
 - **Injectable clock/lock seams** — fake-timer strategy for debounce/interval tests; lock abstraction for pidfile ownership tests.
 
 Additional scaffold inputs carried from exploration (layout incl. `src/config`, ESM/NodeNext, `package.json` shape, `.gitignore`-in-vault contents) are design-doc material, not proposal decisions.

@@ -1,0 +1,7 @@
+# Team sync policy (committed; travels with the vault — RFC §8).
+# Precedence: SUPERMEMORY_* env > this file > .memory/rules.md git: block
+# > built-ins (15 min / 45 s). Timing knobs only — hygiene gates are not
+# overridable here.
+sync:
+  # sync_interval_minutes: 15
+  # debounce_seconds: 45
