@@ -2,9 +2,9 @@
 
 Phase: apply · Chained delivery (stacked-to-main): PR-1 (W1, Phase 1 tasks 1.1–1.3) complete on
 `add-project-config/pr1-append-lines`, stacked on `add-m1-core/pr3-sync-engine` (base tip `24fe9cb`
-planning commit; the slice's code commits sit on top of it). This run covers **only W1** — the
-append-lines extraction + init migration (design AD-5; no behavior change). W2–W5 remain in
-separate apply runs on their own stacked branches.
+planning commit; the slice's code commits sit on top of it); PR-2 (W2, Phase 2 tasks 2.1–2.3)
+complete on `add-project-config/pr2-project-config`, stacked on the W1 tip `be6243c`. W3–W5 remain
+in separate apply runs on their own stacked branches.
 
 Session delivery resolution: `auto-chain` / `stacked-to-main` (resolved before this phase; not
 re-decided here). Strict TDD active (`openspec/config.yaml`: `strict_tdd: true`, `vitest run`).
@@ -54,9 +54,52 @@ re-decided here). Strict TDD active (`openspec/config.yaml`: `strict_tdd: true`,
   instruction; the next commit (`9cf637c`) greens it. Both commits documented accordingly.
 - No test was modified to make it pass; no existing test file changed in this slice.
 
-## Remaining tasks (later slices, not this run)
+## W2 slice (PR 2) — project-config module (Phase 2 tasks 2.1–2.3)
 
-- W2 (PR 2): `src/config/project-config.ts` + `makeProjectDir` helper + loader/finder/chain/author tests (tasks 2.1–2.3), stacked on this branch.
-- W3 (PR 3): consumer rewiring — serve/sync/resolve (3.1–3.4).
+Run on `add-project-config/pr2-project-config` (stacked on W1 tip `be6243c`). Delivery:
+`auto-chain` / `stacked-to-main` (session-resolved; not re-decided). Strict TDD active
+(`openspec/config.yaml`: `strict_tdd: true`, `vitest run`). Scope honored: **no consumer
+rewiring** — `server.ts`/`setup.ts` keep their old copies; only the tests import the new module
+(that isolation is the slice's point).
+
+### Completed tasks
+
+| Task | Commit | Summary |
+|---|---|---|
+| 2.1 | `dea09fb` | RED: `test/helpers/project.ts` (new) — `makeProjectDir({ config?, example?, gitignore?, nested? })` → `{ root, subdir?, cleanup() }`: `mkdtemp(os.tmpdir())` + bare `git init` (the `.git` marker discovery needs it), optional pre-placed `supermemory.json` (via the module's `PROJECT_CONFIG_FILENAME` constant), example/gitignore bytes, recursive subdir. Plus `test/config/project-config.test.ts` (new, 29 tests) — the full RED suite: loader fail-safe matrix (absent · unreadable chmod 000 · invalid JSON `{ "vault": ` · non-object roots string/number/null/array · vault missing · non-string · relative `"../vaults/notes"` · author half-present dropped with vault honored · unknown keys ignored · happy path) · `findProjectRoot` (at root · from subdir · nested work trees nearest-wins · no `.git` anywhere → undefined · `.git` as a FILE = linked-worktree shape) · `projectConfigPath` (join / outside → undefined) · `projectAuthor` (both · absent/undefined · malformed one-of/empty/non-object → undefined) · `resolveVaultPath` chain (flag>env>file · env>file · file last · nothing → AppError `NO_VAULT_CONFIGURED` with the byte-pinned message + hint naming `--vault` and `SUPERMEMORY_VAULT` · corrupt file fails safe to the same pinned error · relative vault treated as unconfigured) · `EXAMPLE_CONFIG_CONTENT` byte pin (placeholder, no author anywhere). Hermetic: stub `EnvSource`, no `process.env` mutation, no chdir, no HOME writes, no network (local `git init` only, under the suite's git-env isolation). |
+| 2.2 | `8ce0100` | GREEN + REFACTOR: `src/config/project-config.ts` (new, 163 lines) per design AD-6 signature block — `PROJECT_CONFIG_FILENAME`/`EXAMPLE_CONFIG_FILENAME`/`EXAMPLE_CONFIG_CONTENT` (pinned bytes), `ProjectConfig` (flat), `findProjectRoot` (pure-fs `statSync` walk, `.git` dir OR file, nearest-root-only, per-level try/catch), `projectConfigPath`, `loadProjectConfig` (fail-safe, never throws for content), `projectAuthor` (structurally typed — no `sync/` import), `resolveVaultPath({ vaultFlag, env, basePath })` reusing `NO_VAULT_CONFIGURED_MESSAGE` from `util/errors.ts`. REFACTOR: author validation shared once (`parseOptionalAuthor`) between loader and `projectAuthor` (no duplication); the loader's return collapsed from conditional-spread to a plain ternary; imports only node builtins + `config/env.js` (`EnvSource`, `ENV_KEYS`, `readString`) + `util/errors.js`; zero ambient reads — no `process.cwd()`/`os.homedir()`/`process.env` anywhere in the module. |
+| 2.3 | (gate, no commit) | W2 slice gate — all green, see verification below. Gate-only task: no code diff of its own; the docs commit records it (W1 precedent — no empty commit). |
+
+### TDD Cycle Evidence (strict_tdd)
+
+| Task | RED (failing first, observed) | GREEN | REFACTOR |
+|---|---|---|---|
+| 2.1 | `npx vitest run test/config/project-config.test.ts` → suite fails to load: `Error: Cannot find module '../../src/config/project-config.js' imported from test/config/project-config.test.ts` — 1 failed suite, 0 tests ran (module intentionally absent) | — | — |
+| 2.2 | — (implementation lands against the red suite) | focused: 40/40 (`project-config.test.ts` + 3 existing helper test files); full suite: **56 files / 520 tests, all passing** (491 pre-existing untouched + 29 new) | author validation deduplicated into `parseOptionalAuthor`; conditional-spread → ternary; re-ran full suite + typecheck + build after the refactor — all clean |
+| 2.3 | — | — | — (gate) |
+
+### Files changed (W2 slice)
+
+- Created: `src/config/project-config.ts` (163 lines), `test/helpers/project.ts` (76 lines), `test/config/project-config.test.ts` (396 lines)
+- Docs: `openspec/changes/add-project-config/tasks.md` (2.1–2.3 ticked), this file
+
+### Verification evidence (task 2.3 slice gate)
+
+- `npx vitest run` → **56 files / 520 tests, all passing** (ran twice: post-GREEN and post-refactor; existing suite untouched — `server.ts`/`setup.ts` still own their old copies).
+- `npm run typecheck` → clean. `npm run build` → clean.
+- `git diff add-project-config/pr1-append-lines --stat` → confined to `src/config/project-config.ts`, `test/helpers/project.ts`, `test/config/project-config.test.ts` (task text says "two new files"; three is correct — helper + test + module) + the openspec docs from this docs commit. No other module imports the new one (independently landable/revertible).
+- Branch `add-project-config/pr2-project-config`; conventional commits `dea09fb` (test, RED) + `8ce0100` (feat, GREEN). Nothing pushed (maintainer-owned delivery); `main` untouched.
+- **Review-budget variance (reported, not self-excepted):** forecast ~350 → actual **635 gross lines, additions-only** (module 163 ≈ forecast 150; helper 76 ≈ 60; test matrix 396 vs ~140 forecast — the 29 enumerated scenarios are inherently verbose). One honest slicing pass already ran at tasks time (W1–W5 seams); suite + module are one TDD work unit, so no cohesive further split exists without dropping enumerated spec coverage. Decision deferred to review per the chained-pr rule (accept, or split the PR boundary at review time); no `size:exception` claimed.
+
+### Notes & deviations (W2)
+
+- **RED commit precedent (W1 convention).** Task 2.1's commit (`dea09fb`) contains the helper + suite in their observed-RED state (imports of the not-yet-existing module); commit `8ce0100` greens them.
+- **Hint-tier static-analysis advisories in the module (accepted, justified):** `no-runtime-typeof` ×2 and `no-unsafe-dictionary-unknown` ×2 flag the loader's runtime `typeof` checks and `Record<string, unknown>` indexing on `JSON.parse` output — that runtime validation of untrusted file content is the fail-safe loader's spec-mandated job ("MUST NOT crash with a parse error, MUST NOT partially honor a malformed file"). No 🔴 findings; typecheck + build clean.
+- **`path.resolve` in `findProjectRoot`** normalizes `basePath` so the `dirname` walk terminates on every input; for the absolute paths the seam rule guarantees (commander edges inject `process.cwd()` — W3), it is a pure operation. The module still contains no ambient reads.
+- The module's `NO_VAULT_CONFIGURED` hint wording was refreshed to name both escape hatches (`--vault` / `SUPERMEMORY_VAULT`) per design §4 and to drop the old "default vault" global-config language; the byte-pinned **message** is asserted verbatim by the tests.
+
+## Remaining tasks (later slices, not these runs)
+
+- W3 (PR 3): consumer rewiring — serve/sync/resolve (3.1–3.4), stacked on this branch.
 - W4 (PR 4): setup rework + the atomic global-config deletion (4.1–4.6); setup becomes the util's second consumer (`appendMissingLines(root/.gitignore, "supermemory.json\n")`).
 - W5 (PR 5): RFC v1.3 + docs sweep (5.1–5.3); Phase 6 final gate (6.1).
