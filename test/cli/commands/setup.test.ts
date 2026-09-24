@@ -41,21 +41,59 @@ function scriptedPort(answers: {
   authorName: string[];
   authorEmail: string[];
   confirm: boolean[];
+  /** Raw answers for the timing prompts; omitted/empty ⇒ accept the default. */
+  debounceSeconds?: string[];
+  syncIntervalMinutes?: string[];
 }): PromptPort & {
   asked: {
     vaultPath: number;
     authorName: number;
     authorEmail: number;
     confirm: number;
+    debounceSeconds: number;
+    syncIntervalMinutes: number;
   };
   /** Every prompt message, in ask order (wizard-string sweep). */
   messages: string[];
 } {
-  const state = { vaultPath: 0, authorName: 0, authorEmail: 0, confirm: 0 };
+  const state = {
+    vaultPath: 0,
+    authorName: 0,
+    authorEmail: 0,
+    confirm: 0,
+    debounceSeconds: 0,
+    syncIntervalMinutes: 0,
+  };
+  /** Shared by the two timing prompts: empty/absent answer ⇒ the default. */
+  const timing = (
+    key: "debounceSeconds" | "syncIntervalMinutes",
+    self: { asked: Record<string, number> },
+    message: string,
+    def: number,
+  ): string => {
+    self.asked[key] = (self.asked[key] ?? 0) + 1;
+    messages.push(message);
+    const answer = answers[key]?.[state[key]];
+    state[key] += 1;
+    return answer === undefined || answer === "" ? String(def) : answer;
+  };
   const messages: string[] = [];
   return {
-    asked: { vaultPath: 0, authorName: 0, authorEmail: 0, confirm: 0 },
+    asked: {
+      vaultPath: 0,
+      authorName: 0,
+      authorEmail: 0,
+      confirm: 0,
+      debounceSeconds: 0,
+      syncIntervalMinutes: 0,
+    },
     messages,
+    async debounceSeconds(message: string, def: number): Promise<string> {
+      return timing("debounceSeconds", this, message, def);
+    },
+    async syncIntervalMinutes(message: string, def: number): Promise<string> {
+      return timing("syncIntervalMinutes", this, message, def);
+    },
     async vaultPath(message: string): Promise<string> {
       this.asked.vaultPath += 1;
       messages.push(message);
@@ -753,5 +791,82 @@ describe("registerSetupCommand (commander edge owns the log)", () => {
     const { lines } = await captureActionLog(fakeResult());
     expect(lines.filter((l) => l.includes("legacy global config"))).toHaveLength(0);
     expect(lines.some((l) => l.includes("setup complete"))).toBe(true);
+  });
+});
+
+describe("runSetup — sync timing prompts (issue #5)", () => {
+  async function runWith(
+    timings: { debounceSeconds?: string[]; syncIntervalMinutes?: string[] },
+  ): Promise<{
+    prompts: ReturnType<typeof scriptedPort>;
+    result: SetupResult | unknown;
+    written: Record<string, unknown>;
+  }> {
+    const project = await makeProjectDir();
+    const vault = await makeVault("sm-setup-timing-v-");
+    try {
+      const prompts = scriptedPort({
+        vaultPath: [vault],
+        authorName: ["Raul"],
+        authorEmail: ["raul@example.com"],
+        confirm: [true],
+        ...timings,
+      });
+      const result = await runSetup(prompts, {
+        basePath: project.root,
+        homeDir: path.join(project.root, "not-home"),
+      }).catch((e: unknown) => e);
+      let written: Record<string, unknown> = {};
+      try {
+        written = JSON.parse(
+          await readFile(path.join(project.root, PROJECT_CONFIG_FILENAME), "utf8"),
+        ) as Record<string, unknown>;
+      } catch {
+        // nothing written (failure path)
+      }
+      return { prompts, result, written };
+    } finally {
+      await project.cleanup();
+      await rm(vault, { recursive: true, force: true });
+    }
+  }
+
+  it("defaults are 45 s / 15 min and leave supermemory.json without timing keys", async () => {
+    const { prompts, written, result } = await runWith({});
+    expect(prompts.asked.debounceSeconds).toBe(1);
+    expect(prompts.asked.syncIntervalMinutes).toBe(1);
+    expect(result).toMatchObject({ debounceSeconds: 45, syncIntervalMinutes: 15 });
+    expect(written).not.toHaveProperty("debounceSeconds");
+    expect(written).not.toHaveProperty("syncIntervalMinutes");
+  });
+
+  it("custom values are persisted in supermemory.json", async () => {
+    const { written, result } = await runWith({
+      debounceSeconds: ["10"],
+      syncIntervalMinutes: ["5"],
+    });
+    expect(result).toMatchObject({ debounceSeconds: 10, syncIntervalMinutes: 5 });
+    expect(written["debounceSeconds"]).toBe(10);
+    expect(written["syncIntervalMinutes"]).toBe(5);
+  });
+
+  it("re-prompts on invalid input (non-numeric, zero, negative, fractional, out of bounds)", async () => {
+    const { prompts, written } = await runWith({
+      debounceSeconds: ["abc", "-4", "1.5", "99999", "30"],
+      syncIntervalMinutes: ["0", "2000", "10"],
+    });
+    expect(prompts.asked.debounceSeconds).toBe(5);
+    expect(written["debounceSeconds"]).toBe(30);
+    expect(prompts.asked.syncIntervalMinutes).toBe(3);
+    expect(written["syncIntervalMinutes"]).toBe(10);
+  });
+
+  it("aborts with INVALID_SYNC_SETTING after repeated invalid input and writes nothing", async () => {
+    const { result, written } = await runWith({
+      debounceSeconds: ["x", "x", "x", "x", "x"],
+    });
+    expect(result).toBeInstanceOf(AppError);
+    expect((result as AppError).code).toBe("INVALID_SYNC_SETTING");
+    expect(written).toEqual({});
   });
 });
