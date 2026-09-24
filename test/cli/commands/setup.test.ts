@@ -5,8 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { simpleGit } from "simple-git";
 import { AppError } from "../../../src/util/errors.js";
-import { runSetup, type PromptPort } from "../../../src/cli/commands/setup.js";
+import { runSetup, type PromptPort, type SetupResult } from "../../../src/cli/commands/setup.js";
 import {
+  EXAMPLE_CONFIG_CONTENT,
   EXAMPLE_CONFIG_FILENAME,
   PROJECT_CONFIG_FILENAME,
 } from "../../../src/config/project-config.js";
@@ -20,6 +21,13 @@ import { makeProjectDir } from "../../helpers/project.js";
 // prompt or write; refusals write nothing. The legacy global config is
 // never imported, never deleted — the hint test fakes the home path via
 // injection and never touches the real one.
+//
+// Task 4.3 [RED second]: writes land at the work-tree root — fresh
+// supermemory.json (no merge), one appended .gitignore line (N7
+// semantics via appendMissingLines), the committed example file
+// (created-when-absent, never overwritten, placeholder bytes, no
+// author anywhere), the ≤5-attempt abort leaving zero artifacts, the
+// pinned confirm bytes, and the one-time legacy hint (AD-4).
 
 /** A scripted prompt port answering in order; records the questions. */
 function scriptedPort(answers: {
@@ -28,31 +36,47 @@ function scriptedPort(answers: {
   authorEmail: string[];
   confirm: boolean[];
 }): PromptPort & {
-  asked: { vaultPath: number; authorName: number; authorEmail: number };
+  asked: {
+    vaultPath: number;
+    authorName: number;
+    authorEmail: number;
+    confirm: number;
+  };
+  /** Every prompt message, in ask order (wizard-string sweep). */
+  messages: string[];
 } {
-  const state = { vaultPath: 0, authorName: 0, authorEmail: 0 };
+  const state = { vaultPath: 0, authorName: 0, authorEmail: 0, confirm: 0 };
+  const messages: string[] = [];
   return {
-    asked: { vaultPath: 0, authorName: 0, authorEmail: 0 },
-    async vaultPath(_message: string): Promise<string> {
+    asked: { vaultPath: 0, authorName: 0, authorEmail: 0, confirm: 0 },
+    messages,
+    async vaultPath(message: string): Promise<string> {
       this.asked.vaultPath += 1;
+      messages.push(message);
       const answer = answers.vaultPath[state.vaultPath] ?? "";
       state.vaultPath += 1;
       return answer;
     },
-    async authorName(_message: string, def?: string): Promise<string> {
+    async authorName(message: string, def?: string): Promise<string> {
       this.asked.authorName += 1;
+      messages.push(message);
       const answer = answers.authorName[state.authorName];
       state.authorName += 1;
       return answer === "" || answer === undefined ? (def ?? "") : answer;
     },
-    async authorEmail(_message: string, def?: string): Promise<string> {
+    async authorEmail(message: string, def?: string): Promise<string> {
       this.asked.authorEmail += 1;
+      messages.push(message);
       const answer = answers.authorEmail[state.authorEmail];
       state.authorEmail += 1;
       return answer === "" || answer === undefined ? (def ?? "") : answer;
     },
-    async confirm(_message: string): Promise<boolean> {
-      return answers.confirm[0] ?? true;
+    async confirm(message: string): Promise<boolean> {
+      this.asked.confirm += 1;
+      messages.push(message);
+      const answer = answers.confirm[state.confirm];
+      state.confirm += 1;
+      return answer ?? true;
     },
   };
 }
@@ -286,5 +310,371 @@ describe("runSetup — vault loop and input expansion", () => {
       await project.cleanup();
       await rm(fakeHome, { recursive: true, force: true });
     }
+  });
+});
+
+describe("runSetup — writes at the work-tree root (AD-2/AD-3/AD-5)", () => {
+  const happyAnswers = (vault: string) => ({
+    vaultPath: [vault],
+    authorName: ["Raul"],
+    authorEmail: ["raul@example.com"],
+    confirm: [true],
+  });
+
+  it("writes all three artifacts at the WORK-TREE ROOT when launched from a subdirectory", async () => {
+    // AD-2 × AD-1 agreement: setup and resolution share one definition
+    // of "project root" — a subdir launch must land the artifacts where
+    // a later subdir launch of serve/sync will read them.
+    const project = await makeProjectDir({ nested: "packages/app" });
+    const vault = await makeVault("sm-setup-sub-v-");
+    try {
+      const prompts = scriptedPort(happyAnswers(vault));
+      const result = await runSetup(prompts, {
+        basePath: project.subdir as string,
+        homeDir: path.join(project.root, "not-home"),
+      });
+
+      expect(result.root).toBe(project.root);
+      expect(
+        existsSync(path.join(project.root, PROJECT_CONFIG_FILENAME)),
+      ).toBe(true);
+      expect(
+        existsSync(path.join(project.root, EXAMPLE_CONFIG_FILENAME)),
+      ).toBe(true);
+      expect(existsSync(path.join(project.root, ".gitignore"))).toBe(true);
+      // Nothing at the launch subdirectory itself.
+      expect(
+        existsSync(path.join(project.subdir as string, PROJECT_CONFIG_FILENAME)),
+      ).toBe(false);
+    } finally {
+      await project.cleanup();
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+
+  it("rewrites the file FRESH on rerun — stale keys do not survive; serialization pinned", async () => {
+    const project = await makeProjectDir({
+      config: { vault: "/old/vault", legacy: true },
+    });
+    const vault = await makeVault("sm-setup-fresh-v-");
+    try {
+      const prompts = scriptedPort(happyAnswers(vault));
+      await runSetup(prompts, {
+        basePath: project.root,
+        homeDir: path.join(project.root, "not-home"),
+      });
+
+      const raw = await readFile(
+        path.join(project.root, PROJECT_CONFIG_FILENAME),
+        "utf8",
+      );
+      // Byte-exact serialization contract (design §4.3): flat shape,
+      // 2-space indent, trailing newline, vault first / author second.
+      const expected =
+        `{\n  "vault": ${JSON.stringify(vault)},\n` +
+        `  "author": {\n    "name": "Raul",\n    "email": "raul@example.com"\n  }\n}\n`;
+      expect(raw).toBe(expected);
+      // Neither the old vault nor the stale key survives the rewrite.
+      expect(raw).not.toContain("/old/vault");
+      expect(raw).not.toContain("legacy");
+    } finally {
+      await project.cleanup();
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+
+  it("defaults the author prompt from the vault's git identity — accepting defaults writes it", async () => {
+    const project = await makeProjectDir();
+    const vault = await makeVault("sm-setup-def-v-"); // identity: Vault Git Identity
+    try {
+      const prompts = scriptedPort({
+        vaultPath: [vault],
+        authorName: [""], // accept the default
+        authorEmail: [""], // accept the default
+        confirm: [true],
+      });
+      await runSetup(prompts, {
+        basePath: project.root,
+        homeDir: path.join(project.root, "not-home"),
+      });
+      const raw = JSON.parse(
+        await readFile(
+          path.join(project.root, PROJECT_CONFIG_FILENAME),
+          "utf8",
+        ),
+      ) as { author: { name: string; email: string } };
+      expect(raw.author.name).toBe("Vault Git Identity");
+      expect(raw.author.email).toBe("vault-identity@example.com");
+    } finally {
+      await project.cleanup();
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+
+  it("appends the gitignore line when missing; every other entry stays byte-unchanged", async () => {
+    const project = await makeProjectDir({ gitignore: "node_modules/\n" });
+    const vault = await makeVault("sm-setup-gi-v-");
+    try {
+      const prompts = scriptedPort(happyAnswers(vault));
+      await runSetup(prompts, {
+        basePath: project.root,
+        homeDir: path.join(project.root, "not-home"),
+      });
+      const raw = await readFile(path.join(project.root, ".gitignore"), "utf8");
+      expect(raw).toBe("node_modules/\nsupermemory.json\n");
+    } finally {
+      await project.cleanup();
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+
+  it("gitignore append is idempotent across a second run — exactly one line", async () => {
+    const project = await makeProjectDir({ gitignore: "node_modules/\n" });
+    const vault = await makeVault("sm-setup-gi2-v-");
+    try {
+      await runSetup(scriptedPort(happyAnswers(vault)), {
+        basePath: project.root,
+        homeDir: path.join(project.root, "not-home"),
+      });
+      await runSetup(scriptedPort(happyAnswers(vault)), {
+        basePath: project.root,
+        homeDir: path.join(project.root, "not-home"),
+      });
+      const raw = await readFile(path.join(project.root, ".gitignore"), "utf8");
+      expect(raw).toBe("node_modules/\nsupermemory.json\n");
+      expect(raw.split("\n").filter((l) => l === "supermemory.json")).toHaveLength(1);
+    } finally {
+      await project.cleanup();
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a CRLF gitignore — the appended line uses the file's own EOL (N7 port)", async () => {
+    const project = await makeProjectDir({ gitignore: "node_modules/\r\n" });
+    const vault = await makeVault("sm-setup-crlf-v-");
+    try {
+      const prompts = scriptedPort(happyAnswers(vault));
+      await runSetup(prompts, {
+        basePath: project.root,
+        homeDir: path.join(project.root, "not-home"),
+      });
+      const buf = await readFile(path.join(project.root, ".gitignore"));
+      expect(buf.equals(Buffer.from("node_modules/\r\nsupermemory.json\r\n", "utf8"))).toBe(true);
+    } finally {
+      await project.cleanup();
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+
+  it("creates supermemory.example.json when absent — exactly the pinned placeholder bytes, no author anywhere", async () => {
+    const project = await makeProjectDir();
+    const vault = await makeVault("sm-setup-ex-v-");
+    try {
+      const prompts = scriptedPort(happyAnswers(vault));
+      await runSetup(prompts, {
+        basePath: project.root,
+        homeDir: path.join(project.root, "not-home"),
+      });
+      const raw = await readFile(
+        path.join(project.root, EXAMPLE_CONFIG_FILENAME),
+        "utf8",
+      );
+      expect(raw).toBe(EXAMPLE_CONFIG_CONTENT); // placeholder vault, never the answered path
+      expect(raw).toContain("vault");
+      expect(raw.toLowerCase()).not.toContain("author");
+    } finally {
+      await project.cleanup();
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+
+  it("never overwrites a pre-placed (committed) example — byte-identical after setup", async () => {
+    const committedExample = '{\n  "vault": "/team/vault/placeholder"\n}\n';
+    const project = await makeProjectDir({ example: committedExample });
+    const vault = await makeVault("sm-setup-ex2-v-");
+    try {
+      const prompts = scriptedPort(happyAnswers(vault));
+      await runSetup(prompts, {
+        basePath: project.root,
+        homeDir: path.join(project.root, "not-home"),
+      });
+      const raw = await readFile(
+        path.join(project.root, EXAMPLE_CONFIG_FILENAME),
+        "utf8",
+      );
+      expect(raw).toBe(committedExample);
+    } finally {
+      await project.cleanup();
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts after MAX_VAULT_ATTEMPTS = 5 invalid answers and leaves zero artifacts", async () => {
+    const project = await makeProjectDir();
+    try {
+      const prompts = scriptedPort({
+        vaultPath: [
+          "/nonexistent/a",
+          "/nonexistent/b",
+          "/nonexistent/c",
+          "/nonexistent/d",
+          "/nonexistent/e",
+        ],
+        authorName: [],
+        authorEmail: [],
+        confirm: [true, true, true, true, true],
+      });
+      await expect(
+        runSetup(prompts, {
+          basePath: project.root,
+          homeDir: path.join(project.root, "not-home"),
+        }),
+      ).rejects.toBeInstanceOf(AppError);
+      expect(prompts.asked.vaultPath).toBe(5);
+      expect(
+        existsSync(path.join(project.root, PROJECT_CONFIG_FILENAME)),
+      ).toBe(false);
+      expect(
+        existsSync(path.join(project.root, EXAMPLE_CONFIG_FILENAME)),
+      ).toBe(false);
+      expect(existsSync(path.join(project.root, ".gitignore"))).toBe(false);
+    } finally {
+      await project.cleanup();
+    }
+  });
+
+  it("pins the confirm message bytes; no wizard string writes a config anywhere but the project", async () => {
+    const project = await makeProjectDir();
+    const vault = await makeVault("sm-setup-conf-v-");
+    try {
+      const prompts = scriptedPort(happyAnswers(vault));
+      await runSetup(prompts, {
+        basePath: project.root,
+        homeDir: path.join(project.root, "not-home"),
+      });
+
+      const confirmMessage = prompts.messages.find(
+        (m) => m.startsWith("Write "),
+      );
+      expect(confirmMessage).toBe(
+        `Write supermemory.json in ${project.root} (vault ${vault}, author "Raul" <raul@example.com>)?`,
+      );
+      // The wizard (PromptPort flow) never logs and never mentions any
+      // other config surface — the AD-4 legacy hint line lives at the
+      // console edge, not in the wizard.
+      for (const message of prompts.messages) {
+        expect(message).not.toContain("global config");
+      }
+    } finally {
+      await project.cleanup();
+      await rm(vault, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runSetup — legacy global config hint (AD-4)", () => {
+  const happyAnswers = (vault: string) => ({
+    vaultPath: [vault],
+    authorName: ["Raul"],
+    authorEmail: ["raul@example.com"],
+    confirm: [true],
+  });
+
+  it("sets SetupResult.legacyConfigPath when the legacy file exists under the INJECTED home; never reads or deletes it", async () => {
+    const project = await makeProjectDir();
+    const vault = await makeVault("sm-setup-legacy-v-");
+    const fakeHome = await mkdtemp(path.join(os.tmpdir(), "sm-setup-legacy-h-"));
+    const legacyDir = path.join(fakeHome, ".config", "supermemory");
+    await mkdir(legacyDir, { recursive: true });
+    const legacyPath = path.join(legacyDir, "config.json");
+    const legacyBytes = '{\n  "vaults": { "default": "/LEAK/legacy-vault" }\n}\n';
+    await writeFile(legacyPath, legacyBytes, "utf8");
+    try {
+      const prompts = scriptedPort(happyAnswers(vault));
+      const result = await runSetup(prompts, {
+        basePath: project.root,
+        homeDir: fakeHome,
+      });
+      expect(result.legacyConfigPath).toBe(legacyPath);
+      // Never deleted, never modified.
+      expect(await readFile(legacyPath, "utf8")).toBe(legacyBytes);
+      // Never imported: the project file holds only the answered vault.
+      const raw = await readFile(
+        path.join(project.root, PROJECT_CONFIG_FILENAME),
+        "utf8",
+      );
+      expect(raw).not.toContain("/LEAK/legacy-vault");
+    } finally {
+      await project.cleanup();
+      await rm(vault, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves legacyConfigPath undefined when the legacy file is absent", async () => {
+    const project = await makeProjectDir();
+    const vault = await makeVault("sm-setup-nolegacy-v-");
+    const fakeHome = await mkdtemp(
+      path.join(os.tmpdir(), "sm-setup-nolegacy-h-"),
+    );
+    try {
+      const prompts = scriptedPort(happyAnswers(vault));
+      const result = await runSetup(prompts, {
+        basePath: project.root,
+        homeDir: fakeHome,
+      });
+      expect(result.legacyConfigPath).toBeUndefined();
+    } finally {
+      await project.cleanup();
+      await rm(vault, { recursive: true, force: true });
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("setup completion lines (console edge owns the log; wizard never logs)", () => {
+  // Dynamic import keeps this RED observable per-test at 4.3 (the
+  // export does not exist yet) without failing the whole suite file at
+  // load time — the static-import load-failure RED pattern was already
+  // used for whole-new files (W1/W2).
+  async function completionLinesFn():
+    Promise<((result: SetupResult) => string[]) | undefined> {
+    const mod = (await import(
+      "../../../src/cli/commands/setup.js"
+    )) as unknown as Record<string, unknown>;
+    return mod["setupCompletionLines"] as
+      | ((result: SetupResult) => string[])
+      | undefined;
+  }
+
+  it("emits exactly one legacy-hint line with the pinned bytes iff legacyConfigPath is present", async () => {
+    const lines = await completionLinesFn();
+    expect(lines).toBeTypeOf("function");
+    if (lines === undefined) return; // keep the RED message above clean
+    const withLegacy = {
+      root: "/p",
+      vault: "/v",
+      author: { name: "Raul", email: "raul@example.com" },
+      legacyConfigPath: "/home/.config/supermemory/config.json",
+    } as SetupResult;
+    const out = lines(withLegacy);
+    expect(out).toHaveLength(2); // completion + EXACTLY ONE legacy line
+    expect(out[1]).toBe(
+      "legacy global config found at /home/.config/supermemory/config.json — supermemory no longer reads it. You may delete it manually.",
+    );
+  });
+
+  it("emits no legacy line when legacyConfigPath is absent", async () => {
+    const lines = await completionLinesFn();
+    expect(lines).toBeTypeOf("function");
+    if (lines === undefined) return;
+    const withoutLegacy = {
+      root: "/p",
+      vault: "/v",
+      author: { name: "Raul", email: "raul@example.com" },
+    } as SetupResult;
+    const out = lines(withoutLegacy);
+    expect(out).toHaveLength(1); // completion only
+    expect(out.join("\n")).not.toContain("legacy global config");
   });
 });
