@@ -4,6 +4,7 @@ import path from "node:path";
 import { writeFile } from "node:fs/promises";
 import type { Command } from "commander";
 import { input, confirm } from "@inquirer/prompts";
+import { directoryInput } from "./setup-completion.js";
 import { simpleGit } from "simple-git";
 import { AppError } from "../../util/errors.js";
 import { createLogger } from "../../util/log.js";
@@ -46,7 +47,9 @@ export interface PromptPort {
 }
 
 export const consolePrompts: PromptPort = {
-  vaultPath: (message) => input({ message }),
+  // Tab directory-completion for the vault path (console edge only:
+  // the scripted test port and the PromptPort seam are unchanged).
+  vaultPath: (message) => directoryInput({ message }),
   authorName: (message, defaultValue) =>
     defaultValue === undefined
       ? input({ message })
