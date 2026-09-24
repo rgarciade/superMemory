@@ -251,3 +251,100 @@ verification is the gate evidence below).
 - **Diagram restructure note.** The new AGENT PROJECT box is 2 content lines taller than the old global-config box, so the VAULT/Git-remote column shifted down 3 lines; both boxes' inner rows are byte-preserved from the original. The MCP→config arrowhead reversed (`◀`) to read "config flows into MCP" with the boot-time discovery label stacked in the gutter.
 - **Task 5.2 produced no commit** — its own wording makes the commit conditional on findings; the sweep is evidenced above. This mirrors the W1–W4 "gate tasks carry no empty commit" convention.
 - **535/535 sanity holds at the W5 tip** — the docs slice changed no behavior (help strings + markdown only), matching the parent's expectation for the Phase 6 final gate.
+
+## Phase 6 — Final phase gate (task 6.1; run on `add-project-config/pr5-rfc-docs`)
+
+Closing gate for the change. Delivery remains `auto-chain` / `stacked-to-main` (session-resolved);
+nothing pushed, `main` untouched. One new test commit landed (`test(p6)` `93d1d33`, see
+acceptance-case (a) below); the gate's own record rides in this docs commit per the W1–W5
+gate-task convention.
+
+### Double-green protocol (task 6.1, verbatim summaries)
+
+Both runs on the final tree (after `93d1d33`); identical summaries, no flake — **two consecutive
+greens, PASS**:
+
+```text
+ RUN 1  > vitest run        (15:22:15)
+ Test Files  55 passed (55)
+      Tests  537 passed (537)
+    Duration  39.27s
+
+ RUN 2  > vitest run        (15:23:02)
+ Test Files  55 passed (55)
+      Tests  537 passed (537)
+    Duration  37.65s
+```
+
+Both runs print one identical stray stderr line (`error: missing required argument 'value'`) — a
+deterministic artifact of a commander `exitOverride` register test's help/error path, present in
+every full run of this suite (including W4/W5 gates); not a failure and not a flake. The known
+resolve-area parallel-git flake lineage did NOT fire in either gate run.
+
+- `npm run typecheck` → clean (exit 0). `npm run build` → clean (exit 0).
+
+### First-class acceptance cases — located, named, confirmed (all green)
+
+| Case | Verdict | Exact test names and files |
+|---|---|---|
+| (a) subdir-launch resolution — setup at root; serve/sync/resolve from a nested subdir resolve the root's vault | **serve half covered (W3); setup half covered (W4); sync/resolve halves were NOT covered → 2 new tests written RED-first** | • `test/mcp/server.test.ts` → "resolves the root project file from a subdirectory launch" (chain: `resolveVaultPath`, `basePath: subdir` → root's vault) and "fails fast with the pinned message when the launch tree configures no vault" (serveVault boot) • `test/config/project-config.test.ts` → "resolves the root from a subdirectory (AD-1 discovery)" • `test/cli/commands/setup.test.ts` → "writes all three artifacts at the WORK-TREE ROOT when launched from a subdirectory" (the setup half) • **NEW** `test/cli/commands/sync.test.ts` → "resolves the root project file's vault from a subdirectory launch" • **NEW** `test/cli/commands/resolve.test.ts` → "resolves the root project file's vault from a subdirectory launch" |
+| (b) twice-setup gitignore idempotence — two runs ⇒ exactly one `supermemory.json` line, every other byte unchanged | **covered (W4)** | `test/cli/commands/setup.test.ts` → "gitignore append is idempotent across a second run — exactly one line" (asserts `raw === "node_modules/\\nsupermemory.json\\n"` — the whole-file byte pin — and exactly one matching line); sibling pins: "appends the gitignore line when missing; every other entry stays byte-unchanged" + the CRLF N7 port |
+| (c) corrupt-file fail-safe — truncated `{ "vault": ` ⇒ exactly `No vault configured. Run: supermemory setup`, no parse crash, nothing partially honored | **covered (W2/W3)** | `test/config/project-config.test.ts` → "invalid JSON (truncated `{ \"vault\": `) → undefined" (loader never crashes, nothing honored) and "corrupt file fails safe to unconfigured — the same pinned error, no parse crash" (the shared startup resolver → byte-exact message); `test/mcp/server.test.ts` → "fails with the byte-exact literal spec wording, independent of the imported constant" (the verbatim literal, history-documented pin) |
+
+**RED evidence for the two new tests (case a, sync/resolve halves).** Against
+`add-project-config/pr2-project-config` (the pre-W3 tree, throwaway worktree, removed after the
+check) both fail: sync times out on the old global-config resolver; resolve hits `LOCK_HELD` at the
+old boot — the `basePath` plumbing they pin did not exist. On the current tree both pass. Landed as
+one commit: `93d1d33` `test(p6): pin the sync/resolve subdir-launch acceptance case (a) end-to-end`
+(2 files, +67). Focused confirmation on the final tree: 2 files / 2 tests passed. The tests are
+discriminating by construction: if `basePath` stopped flowing into the chain, resolution falls to
+the ambient cwd (this repo's root — not a project) and boot fails `NO_VAULT_CONFIGURED`.
+Focused acceptance-area run on the final tree: **5 files / 85 tests, all passing** (`server.test.ts`
++ `project-config.test.ts` + `setup.test.ts` + `sync.test.ts` + `resolve.test.ts`).
+
+### Chain verification — five stacked branches
+
+`git merge-base --is-ancestor` confirms the stack order pr1←base, pr2←pr1, pr3←pr2, pr4←pr3,
+pr5←pr4 (all YES). Per-branch diffs are confined to their slice's files (+ the openspec docs each
+docs commit carries, per chain convention):
+
+| Branch (PR) | vs parent | Slice files (openspec docs elided) | Green gate recorded |
+|---|---|---|---|
+| `add-project-config/pr1-append-lines` | `add-m1-core/pr3-sync-engine` | `src/util/append-lines.ts` +114, `test/util/append-lines.test.ts` +160, `src/cli/commands/init.ts` −103/+17 → 359+/103− | 1.3 (491/491 ×2; typecheck+build clean) |
+| `add-project-config/pr2-project-config` | pr1 | `src/config/project-config.ts` +163, `test/config/project-config.test.ts` +396, `test/helpers/project.ts` +76 → 687+/9− | 2.3 (520/520 ×2) |
+| `add-project-config/pr3-consumer-rewiring` | pr2 | `src/mcp/server.ts`, `src/cli/commands/sync.ts`, `src/cli/commands/resolve.ts` + the 3 migrated test files + `test/p3/gate.test.ts` → 416+/110−; **`src/sync/engine.ts`+`git.ts` diff: 0 lines** | 3.4 (526/526) |
+| `add-project-config/pr4-setup-rework` | pr3 | `src/cli/commands/setup.ts` +206/−, `src/config/env.ts`, `src/util/errors.ts`, DELETED `src/config/global-config.ts` (−71) + `test/config/global-config.test.ts` (−89), `test/cli/commands/setup.test.ts` +795-ish rewrite, env/p1/errors test trims → 906+/421−; **engine/git diff: 0 lines** | 4.6 (535/535 ×2) |
+| `add-project-config/pr5-rfc-docs` | pr4 | `docs/RFC.md` 140 lines, `serve.ts`/`sync.ts`/`resolve.ts` 1-line help rewords (sanctioned touch), + `test(p6)`'s `sync.test.ts`/`resolve.test.ts` additions → 196+/67− | 5.3 (535/535 after flake-rerun) + this 6.1 gate (537/537 ×2) |
+
+Each slice's own gate ran green independently on its branch before the next slice stacked
+(recorded in the per-slice sections above); work units are one-conventional-commit-per-task with
+the documented RED-commit convention (test-first commits land observed-RED).
+
+**W4-over-budget note for the pr4 PR description (maintainer-owned delivery).** No PRs are created
+by the agent (nothing pushed). When the pr4 PR is opened, its description must carry: "≈530 gross
+forecast / 1,262 measured cumulative branch churn (847+/415−) — one cohesive unit (`runSetup`
+rework + `setup.test.ts` rewrite + atomic module deletion); the documented split point is after
+task 4.2 (guards); no `size:exception` claimed — reviewer decides at review." Full accounting in
+the W4 section above.
+
+### Task 0.1 verification (ticked with this record)
+
+Base verified: `add-m1-core/pr3-sync-engine` contains the archived add-m1-core work;
+`merge-base(base, pr1) = 24fe9cb` = the base branch tip, so pr1 = base + W1 commits only (no
+Phase-0 commits); all five branch-ancestry checks YES; `git status` clean at Phase 0 (and now).
+Disclosure: tasks.md 0.1 names tip `11199e9`, captured at planning time; the base branch's actual
+tip is `24fe9cb` (the change's own planning docs commit, `chore: plan the add-project-config
+change` family) — the base condition (archived work present; pr1 cut from the tip) holds against
+the real tip; the hash in the task text is stale, not the chain.
+
+### Closing state
+
+- `git status` → working tree clean (no tracked changes); two untracked LOCAL-only artifacts
+  (`.DS_Store`, `.idea/`) predate the gate and are intentionally not committed or gitignored by
+  this change (no code/doc diff may ride the gate record).
+- Final gate commits on pr5: `93d1d33` (test(p6)) + this docs commit; branch tip history:
+  `87d7f75` (docs RFC v1.3) → `d1d239a` (fix help text) → `cd39a98` (W5 record) → `93d1d33`
+  → this record.
+- Nothing pushed; no PRs; `main` untouched throughout.
+
+**PR-5 implementation complete pending verify+delivery.**
