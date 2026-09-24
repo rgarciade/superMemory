@@ -2,11 +2,11 @@ import type { Command } from "commander";
 import { confirm, editor } from "@inquirer/prompts";
 import { validateBoot } from "../../boot/validate-boot.js";
 import { ProcessEnvSource } from "../../config/env.js";
-import { loadGlobalConfig } from "../../config/global-config.js";
 import {
-  authorFromConfig,
+  loadProjectConfig,
+  projectAuthor,
   resolveVaultPath,
-} from "../../mcp/server.js";
+} from "../../config/project-config.js";
 import { loadRules } from "../../rules/parser.js";
 import { createGitClient } from "../../sync/git.js";
 import { PidfileLock } from "../../sync/lock.js";
@@ -37,6 +37,12 @@ import { vaultPaths } from "../../util/paths.js";
 
 export interface ResolveCommandInput {
   vaultFlag?: string;
+  /**
+   * Launch directory for project-config discovery (add-project-config
+   * AD-1). REQUIRED: the commander action (the true ambient edge)
+   * injects `process.cwd()`; tests inject the fixture root.
+   */
+  basePath: string;
   out: (line: string) => void;
   /** Injectable for tests; defaults to the real terminal prompts. */
   prompt?: ResolvePromptPort;
@@ -87,8 +93,10 @@ export function registerResolveCommand(
       "vault path or configured name (overrides SUPERMEMORY_VAULT / vaults.default)",
     )
     .action(async (opts: { vault?: string }) => {
+      // The launch directory is injected HERE — the one ambient edge (AD-6).
       await run({
         vaultFlag: opts.vault,
+        basePath: process.cwd(),
         out: (line) => process.stdout.write(`${line}\n`),
       });
     });
@@ -113,7 +121,14 @@ export function formatResolveOutcome(outcome: ResolveOutcome): string {
 /** Boots the guided flow over the resolved vault, holding the sync lock throughout. */
 export async function runResolveCommand(input: ResolveCommandInput): Promise<void> {
   const env = new ProcessEnvSource();
-  const vaultPath = await resolveVaultPath(input.vaultFlag, env);
+  // The spec-frozen chain (flag → SUPERMEMORY_VAULT → project file at the
+  // nearest work-tree root of basePath); unresolvable ⇒ the pinned
+  // NO_VAULT_CONFIGURED error from config/project-config.
+  const vaultPath = await resolveVaultPath({
+    vaultFlag: input.vaultFlag,
+    env,
+    basePath: input.basePath,
+  });
   await validateBoot(vaultPath);
 
   const lock = new PidfileLock({ vaultRoot: vaultPath });
@@ -137,13 +152,15 @@ export async function runResolveCommand(input: ResolveCommandInput): Promise<voi
 
   try {
     const rules = await loadRules(vaultPaths(vaultPath).rulesPath);
-    const globalConfig = await loadGlobalConfig(env);
+    // AD-7: the commit identity comes from the project config at the
+    // launch root — absent ⇒ undefined ⇒ the finalize commit inherits
+    // the vault's own Git identity.
     const report = await runResolve({
       vaultPath,
       rules,
       git: createGitClient(vaultPath),
       prompt: input.prompt ?? consoleResolvePrompt,
-      author: authorFromConfig(globalConfig),
+      author: projectAuthor(await loadProjectConfig(input.basePath)),
       via: "cli",
     });
 
