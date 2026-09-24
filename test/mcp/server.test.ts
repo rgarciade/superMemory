@@ -13,6 +13,7 @@ import type { RulesModel } from "../../src/rules/types.js";
 import { saveGlobalConfig, type GlobalConfig } from "../../src/config/global-config.js";
 import type { EnvSource } from "../../src/config/env.js";
 import { createTestVault, type TestVault } from "../helpers/create-test-vault.js";
+import { fakeEngine } from "../helpers/fake-engine.js";
 
 // Task 2.16 [RED first]: server.ts — vault resolution, boot composition
 // (pure createServer, tested over InMemoryTransport), the exact
@@ -82,7 +83,11 @@ describe("resolveVaultPath", () => {
 });
 
 describe("createServer", () => {
-  async function setup(): Promise<{ vault: TestVault; rules: RulesModel; server: ReturnType<typeof createServer> }> {
+  async function setup(engine = fakeEngine()): Promise<{
+    vault: TestVault;
+    rules: RulesModel;
+    server: ReturnType<typeof createServer>;
+  }> {
     const vault = await createTestVault();
     const rules = await loadRules(vault.root);
     const store = await buildIndex(vault.root, rules);
@@ -92,6 +97,7 @@ describe("createServer", () => {
       store,
       clock: { now: () => new Date("2026-01-01T00:00:00.000Z") },
       templates: {},
+      engine,
     });
     return { vault, rules, server };
   }
@@ -154,6 +160,53 @@ describe("createServer", () => {
       const findResult = await client.callTool({ name: "find", arguments: { type: "decision" } });
       const payload = findResult.structuredContent as { results: Array<{ id: string }> };
       expect(payload.results.map((r) => r.id)).toContain("DEC-1");
+
+      await client.close();
+      await server.close();
+    } finally {
+      await vault.cleanup();
+    }
+  });
+
+  // Task 3.13 wiring: the save pipeline's SyncPort IS the engine — a
+  // create journals a write event (Via: mcp), an update pulls first.
+  it("routes saves through the engine SyncPort: notifyWrite journaled, update pulls before write", async () => {
+    const engine = fakeEngine();
+    const { vault, server } = await setup(engine);
+    try {
+      const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "test", version: "0.0.0" });
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+      const created = await client.callTool({
+        name: "save",
+        arguments: {
+          type: "decision",
+          decision_id: "DEC-1",
+          spec_id: "SPEC-search",
+          content: "body",
+        },
+      });
+      expect(created.isError).toBeFalsy();
+      // Create: journaled, no pull-before-write.
+      expect(engine.writes).toHaveLength(1);
+      expect(engine.writes[0]).toMatchObject({ op: "add", type: "decision", via: "mcp" });
+      expect(engine.pulls).toEqual([]);
+
+      const updated = await client.callTool({
+        name: "save",
+        arguments: {
+          type: "decision",
+          decision_id: "DEC-1",
+          spec_id: "SPEC-search",
+          content: "body v2",
+        },
+      });
+      expect(updated.isError).toBeFalsy();
+      // Update: pull-before-write ran for the note's path, then journal.
+      expect(engine.pulls).toEqual(["decisions/DEC-1-untitled.md"]);
+      expect(engine.writes).toHaveLength(2);
+      expect(engine.writes[1]).toMatchObject({ op: "update" });
 
       await client.close();
       await server.close();

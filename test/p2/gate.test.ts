@@ -8,6 +8,7 @@ import { createServer } from "../../src/mcp/server.js";
 import { parseRules } from "../../src/rules/parser.js";
 import type { RulesModel } from "../../src/rules/types.js";
 import { createTestVault, type TestVault } from "../helpers/create-test-vault.js";
+import { fakeEngine } from "../helpers/fake-engine.js";
 
 /**
  * P2 phase gate (task 2.18): a contract suite over
@@ -71,6 +72,7 @@ describe("P2 phase gate — contract suite over InMemoryTransport", () => {
         store,
         clock: { now: () => new Date() },
         templates: {},
+        engine: fakeEngine(),
       });
       const { client, close } = await connectedClient(server);
       try {
@@ -98,6 +100,7 @@ describe("P2 phase gate — contract suite over InMemoryTransport", () => {
         store,
         clock: { now: () => new Date() },
         templates: {},
+        engine: fakeEngine(),
       });
       const { client, close } = await connectedClient(server);
       try {
@@ -144,6 +147,7 @@ describe("P2 phase gate — contract suite over InMemoryTransport", () => {
         store,
         clock: { now: () => new Date() },
         templates: {},
+        engine: fakeEngine(),
       });
       const baseline = await connectedClient(baselineServer);
       const baselineResult = await baseline.client.callTool({
@@ -179,6 +183,7 @@ describe("P2 phase gate — contract suite over InMemoryTransport", () => {
         store,
         clock: { now: () => new Date() },
         templates: {},
+        engine: fakeEngine(),
       });
       const reloaded = await connectedClient(reloadedServer);
       try {
@@ -242,6 +247,7 @@ Links back to [[SPEC-restart]].
         store: firstStore,
         clock: { now: () => new Date() },
         templates: {},
+        engine: fakeEngine(),
       });
       const first = await connectedClient(firstServer);
       const firstFind = await first.client.callTool({ name: "find", arguments: {} });
@@ -267,6 +273,7 @@ Links back to [[SPEC-restart]].
         store: secondStore,
         clock: { now: () => new Date() },
         templates: {},
+        engine: fakeEngine(),
       });
       const second = await connectedClient(secondServer);
       const secondFind = await second.client.callTool({ name: "find", arguments: {} });
@@ -296,6 +303,7 @@ Links back to [[SPEC-restart]].
         store,
         clock: { now: () => new Date() },
         templates: {},
+        engine: fakeEngine(),
       });
       const { client, close } = await connectedClient(server);
       try {

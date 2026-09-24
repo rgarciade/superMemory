@@ -1,97 +1,29 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { listNotes } from "../../index/queries.js";
-import type { IndexStore } from "../../index/store.js";
-import type { IndexedNote } from "../../index/types.js";
-import type { RulesModel } from "../../rules/types.js";
-import type { Clock } from "../../util/clock.js";
+import type { SyncEngine } from "../../sync/engine.js";
+import type { EngineState } from "../../sync/state.js";
 
 /**
  * `status` — engine visibility (tool-catalog spec: "sync and status —
- * engine visibility"). P2 ships a documented stub coded against the
- * future `EngineState` shape (design §7): the engine-owned fields
- * (pending writes, conflicts, last successful sync, push-paused, lock
- * owner) are stubbed to their empty/idle values until P3's engine lands
- * — no schema change when it does. `staleNotes` and `formatVersion` are
- * NOT stubbed: they're genuinely computable today from the index +
- * `rules.lifecycle.staleness` + an injected `Clock` (OD-4), with no
- * engine dependency at all.
+ * engine visibility"). P3 wiring (task 3.13): the handler returns the
+ * REAL engine's state snapshot (design §7) — last successful sync,
+ * pending writes, open conflicts, stale notes, format version,
+ * push-paused, lock owner. The P2 stub (and its `note` disclosure
+ * field) is gone: there is no stub to disclose.
  */
 
 export interface StatusDeps {
-  store: IndexStore;
-  rules: RulesModel;
-  clock: Clock;
-}
-
-export interface StaleNoteRef {
-  id: string;
-  title: string;
-  path: string;
-  type: string;
-}
-
-export interface EngineStateStub {
-  lastSuccessfulSyncAt: string | null;
-  pendingWrites: number;
-  conflicts: unknown[];
-  staleNotes: StaleNoteRef[];
-  formatVersion: string;
-  pushPaused: boolean;
-  lockOwner: string | null;
-  /** Documents the stub, per the tool-catalog spec's ship note. */
-  note: string;
-}
-
-export const ENGINE_STUB_NOTE = "engine lands in P3; supermemory sync / plain git still work";
-
-export function buildEngineStateStub(deps: StatusDeps): EngineStateStub {
-  return {
-    lastSuccessfulSyncAt: null,
-    pendingWrites: 0,
-    conflicts: [],
-    staleNotes: computeStaleNotes(deps.store, deps.rules, deps.clock),
-    formatVersion: deps.rules.formatVersion,
-    pushPaused: false,
-    lockOwner: null,
-    note: ENGINE_STUB_NOTE,
-  };
+  engine: SyncEngine;
 }
 
 export function createStatusHandler(deps: StatusDeps) {
-  return (): CallToolResult => toResult(buildEngineStateStub(deps));
+  return (): CallToolResult => toResult(deps.engine.state());
 }
 
-function computeStaleNotes(store: IndexStore, rules: RulesModel, clock: Clock): StaleNoteRef[] {
-  const field = rules.lifecycle.staleness?.field;
-  if (!field) return [];
-  const now = clock.now();
-  const stale: StaleNoteRef[] = [];
-  for (const note of listNotes(store)) {
-    if (isStale(note, field, now)) {
-      stale.push({ id: note.id, title: note.title, path: note.path, type: note.type });
-    }
-  }
-  return stale.sort((a, b) => a.path.localeCompare(b.path));
-}
-
-function isStale(note: IndexedNote, field: string, now: Date): boolean {
-  const raw = note.frontmatter[field];
-  const date = toDate(raw);
-  return date !== undefined && date < now;
-}
-
-function toDate(value: unknown): Date | undefined {
-  if (value instanceof Date) return Number.isNaN(value.getTime()) ? undefined : value;
-  if (typeof value === "string") {
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
-  }
-  return undefined;
-}
-
-function toResult(payload: object): CallToolResult {
+function toResult(payload: EngineState): CallToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    structuredContent: payload as Record<string, unknown>,
+    // Spread into a fresh object literal: anonymous shapes carry implicit
+    // index signatures (interfaces don't), so no cast is needed.
+    structuredContent: { ...payload },
   };
 }

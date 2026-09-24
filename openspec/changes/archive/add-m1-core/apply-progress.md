@@ -476,12 +476,289 @@ The reviewer's three advisory findings (all non-blocking, per the closure: separ
 
 These are recorded here precisely so they cannot be lost the way the NEW-3..NEW-6 finding texts were (lost with the prior agent's session context); they are candidates for a follow-up batch alongside any rediscovered findings, NOT blockers for PR-2.
 
-## Remaining tasks
+## PR-3 slice 1 (Phase 3, tasks 3.1–3.7) — pure/bounded sync modules
 
-- Phase 3 (3.1–3.14): sync engine + commit grammar + conflict ladder + secrets lint + resolve — PR-3, separate apply run. This also absorbs 2.14's local commit-header parser into `src/sync/commit-message.ts` (3.2) and wires the real `SyncPort`/`IndexPort` into `save-pipeline.ts`/`server.ts` (3.13), replacing the P2 null/stub seams.
+Branch `add-m1-core/pr3-sync-engine` (stacked on PR-2 tip `587ee91`), under the resolved
+auto-chain / stacked-to-main delivery. This slice is the first work-unit slice of PR-3:
+the seven pure/bounded sync modules. The engine, scheduler, resolve flow, CLI commands,
+wiring, and phase gate (3.8–3.14) are the LATER slices of the same chain and were
+**not** implemented or stubbed here.
+
+### Commits (one Conventional Commit work unit per task; tests alongside behavior)
+
+| Task | Module | Commit | Subject |
+|---|---|---|---|
+| 3.1 | `src/sync/secrets.ts` | `b89982a` | feat(sync): add the high-precision secrets lint pattern set |
+| 3.2 | `src/sync/commit-message.ts` (+ absorbs 2.14's parser; `mcp/tools/changes-since.ts` re-points) | `d9627c6` | feat(sync): derive note commits from frontmatter, unify the grammar |
+| 3.3 | `src/sync/git.ts` | `484aeeb` | feat(sync): add the typed thin git wrapper |
+| 3.4 | `src/sync/lock.ts` (+ `test/helpers/memory-lock-registry.ts`) | `3432cf4` | feat(sync): add the pidfile sync lock with stale reclaim |
+| 3.5 | `src/sync/ladder.ts` | `7da706e` | feat(sync): add the pure conflict-ladder classification and union normalizer |
+| 3.6 | `src/sync/conflict-note.ts` (+ `conflictNoteCommitHeader` into `commit-message.ts`) | `eef5052` | feat(sync): write and read conflict notes with secrets lint |
+| 3.7 | `src/sync/state.ts` (+ `mcp/tools/status.ts` delegates `computeStaleNotes`) | `a00f523` | feat(sync): add the engine state snapshot tracker |
+
+### TDD Cycle Evidence (strict TDD, `vitest run`)
+
+Every task ran RED → GREEN → TRIANGULATE; no production code was written before its
+failing test existed. Fixture bugs found mid-cycle were fixed in the TEST (the spec
+intent was preserved), never by bending the test to the implementation.
+
+| Task | RED evidence | GREEN | TRIANGULATE / mid-cycle findings |
+|---|---|---|---|
+| 3.1 | `test/sync/secrets.test.ts` — "no tests" (module missing, import fails) | 28/28 | 8 positive patterns + 11 high-precision negatives (public-key blocks pass, `password=`/entropy shapes excluded by design); masked previews; sorted multi-match lines. Test-fixture bugs fixed: Google-key constant was 32 chars (needs exactly 35), wrong expected line array |
+| 3.2 | `test/sync/commit-message.test.ts` — module missing | 17/17 (+ changes-since behavioral 2/2) | Title priority via shared `deriveTitle`; id-less types; trailer omission; byte-identical repeat derivation; derive→parse round-trip (incl. status transition decomposition); non-grammar headers → undefined. Test expectation fixed: slug title-casing ("SPEC A Some File") |
+| 3.3 | `test/sync/git.test.ts` — module missing | 11/11 | Real repos: autostash survival, same-region conflict abort (HEAD intact, markers gone), continue-after-resolve (replayed on top), author/trailers via `git log --format=%(trailers)`; injected fake pins exact `pull`/`push` args incl. never-force. **Production fix from a hanging test**: `rebase --continue` blocks forever on git's default editor in a tty-less process — the wrapper now pins `GIT_EDITOR=true` (default instance enables only `unsafe.allowUnsafeEditor`). Push moved to raw plumbing so never-force is directly assertable |
+| 3.4 | `test/sync/lock.test.ts` — module missing | 13/13 | The four named MemoryLockRegistry scenarios (single-owner, second-actor refusal over a SHARED registry, stale reclaim-after-rewrite, release-reacquire) + same-pid re-acquire, idempotent release, `currentHolder`, real-pidfile shape/delete, corrupted-pidfile reclaim, ESRCH/EPERM branches. Test bugs fixed: refusal test originally used two registries; corrupted-pidfile test needed the cache dir created |
+| 3.5 | `test/sync/ladder.test.ts` — module missing | 17/17 | Classification table (generated/union/curated/defaults/policy precedence); routing (all-generated, all-union, mixed-auto, ANY-curated aborts whole rebase, empty); union marker-strip local-first; normalizer (sort, dedupe first-wins, stable ties, undated last, idempotent, entry-free passthrough) |
+| 3.6 | `test/sync/conflict-note.test.ts` — module + `conflictNoteCommitHeader` export missing | 9/9 | Name sanitization; frontmatter contract; secret-blocked write touches nothing on disk; resolved-status readback; malformed skipped. **Production bug found during GREEN**: gray-matter parses unquoted ISO `detected_at` as `Date` — reader now normalizes, or every real round-trip would skip its own notes |
+| 3.7 | `test/sync/state.test.ts` — module missing | 6/6 (+ status/sync/server regression suites) | Idle snapshot shape; staleness table (stale/fresh/absent/unparseable, path-sorted); mutation+clear lifecycle; `setRules` swaps formatVersion + staleness field on the next snapshot. `computeStaleNotes` moved into `sync/state.ts`; the P2 stub delegates with zero behavior change (its pre-existing tests untouched, green) |
+
+### Verification
+
+- `npm test` — **414/414 across 48 files** (was 345/345 at 587ee91 baseline; +69 tests this slice).
+- `npm run typecheck` — clean. `npm run build` — clean (`dist/` produced).
+- Hermetic throughout: no network, no HOME writes; lock/ladder/commit-message tests use the named fakes/injections; git tests use `createTestVault`/`createDivergentClones` tmp repos.
+- Working tree clean; every work-unit commit landed green.
+
+### Deviations from design / disclosures (all additive, none change spec surface)
+
+1. **`deriveCommitMessage` takes an input object**, not the task's literal positional
+   `(op, type, frontmatter, prevFrontmatter?)`: title derivation needs body+fileName and
+   id derivation needs the type def — the design's own §4.3 names `notes/parse.ts` as the
+   shared resolver, which requires those inputs. Semantics are exactly design §4.3.
+2. **2.14 parser absorption**: `parseNoteCommitHeader` + types moved to
+   `src/sync/commit-message.ts` (now also decomposing `statusTransition`);
+   `changes-since.ts` imports the shared grammar (mcp→sync is a design-§1.3-sanctioned
+   edge) and re-exports `NoteCommitOp`; its parser unit tests moved to the grammar's
+   test file. No behavioral change (its git-log tests untouched, green).
+3. **`chore(conflict)` header** lives in `commit-message.ts` (`conflictNoteCommitHeader`),
+   added in 3.6's work unit — commit grammar has one home (design §3 ownership table).
+4. **Session-log entry format is this slice's contract**: RFC/design say "sorted by
+   timestamp, dedupe by entry id" but define no literal format; `normalizeSessionLog`
+   pins v1 as `- <timestamp> | <entry-id> | <text>` (documented in the module). Engine
+   (3.8) and future templates follow it.
+5. **Lock second-actor semantics**: refusal is only for a *live other pid*; same-pid
+   re-acquire rewrites (documented + tested). Corrupted pidfiles are treated as stale
+   (reclaimable). `currentHolder()` added so the M1 "report, don't delegate" path can
+   name the owner.
+6. **`status.ts` cleanup while touched** (3.7): private `toResult` takes the real
+   `EngineStateStub` interface and spreads instead of casting (was a bare `object`
+   param). No behavior change; its tests green.
+7. **Ladder `byCategory` includes non-driving categories on curated-abort** (for the
+   report) — the design's `LadderDecision { category, paths, action }` sketch was
+   per-category; routing is whole-rebase, so the decision carries all three buckets
+   plus `curatedPaths`.
+
+### Remaining in PR-3 (later slices, untouched here)
+
+Tasks 3.8–3.14: engine (`runCycle` + rules hooks), scheduler, resolve flow, CLI
+`sync`/`resolve` commands, wiring (real `SyncPort`/`IndexPort`, engine-backed
+`sync`/`status` tools), and the P3 phase gate (headline never-delete test). The
+modules landed here are exactly their dependencies — nothing further was stubbed.
+
+## PR-3 slice 2 (Phase 3, tasks 3.8–3.10) — sync engine, scheduler, guided resolve
+
+Branch `add-m1-core/pr3-sync-engine` (unchanged), same auto-chain / stacked-to-main
+delivery. This slice completed the engine core: `runCycle` (3.8), the
+`TimerPort`-based scheduler (3.9), and the guided `resolve` flow (3.10). Remaining:
+slice 3 (3.11–3.14 — CLI `sync`/`resolve` entries, wiring, P3 phase gate).
+
+### Run history — two stalled-run interruptions (disclosed)
+
+This slice crossed **three apply runs**. Runs 1 and 2 stalled and died mid-slice on
+the unattended-run permission guard (an agent-owned `git push` blocks forever waiting
+for interactive consent that never comes in an unattended run — the parent's guard
+rule now forbids agent-owned pushes entirely). Facts about those runs, honestly
+recorded:
+
+- Neither run pushed, opened a PR, or touched `main`. All damage was local stall.
+- Surviving artifacts inherited by this run: task **3.8 fully committed** as
+  `e91de60` (code + tests, 20/20 focused green; checkbox deliberately left unticked
+  pending the slice docs commit) and task **3.9 present but uncommitted**
+  (`src/sync/scheduler.ts` + `test/sync/scheduler.test.ts`, 10/10 focused green per
+  the parent's verification).
+- This run (run 3) executed with a hard no-push-from-agent-shell policy; every push
+  in tests happens INSIDE the vitest process against hermetic local bare remotes.
+
+### Commits (one Conventional Commit work unit per task; tests alongside behavior)
+
+| Task | Module | Commit | Subject |
+|---|---|---|---|
+| 3.8 | `src/sync/engine.ts` (+ `test/helpers/manual-timer-port.ts`, `test/helpers/remote-vault.ts`) | `e91de60` | feat(sync): add the sync engine cycle with lock, ladder, and backoff |
+| 3.9 | `src/sync/scheduler.ts` | `a007258` | feat(sync): add the write-debounce and interval sync scheduler |
+| 3.10 | `src/sync/resolve.ts` (+ `withConflictResolvedSuffix` in `commit-message.ts`) | `dc6127c` | feat(sync): add the guided conflict-resolution flow |
+
+### TDD Cycle Evidence (strict TDD; provenance honestly labeled per task)
+
+| Task | Provenance | RED evidence | GREEN | TRIANGULATE / findings |
+|---|---|---|---|---|
+| 3.8 | **Reconstructed from the committed artifacts of the stalled runs** — the cycle was executed during those runs; this run could not re-observe the original RED and does not claim to. Re-verification: inspected the committed `test/sync/engine.test.ts` (20 tests) against the task's named scenarios, then ran it | (original RED lost to the stall; the committed suite's structure — real divergent clones, fake lock/timers/index — is the surviving evidence) | 20/20 re-run green | Named scenarios present and asserted: autostash survival, pull-before-write, skip-clean interval, backoff without loss, curated conflict (abort + snapshot branch + conflict note + push paused, local state intact), generated/union auto-ladder, separate `chore(index)`, lock ownership report, rules-refused pre-pull guard, rules-reloaded post-sync hook |
+| 3.9 | **Verification of uncommitted survivor work** — no new code was needed, so no fresh RED was run; honesty requires labeling this verification, not a TDD cycle. Named-coverage audit against task 3.9 verbatim found every required property present, no gaps | n/a (verification-only) | 10/10 re-run green, then committed | Audit checklist: (1) ManualTimerPort queue fakes — trailing-edge reset, provider-form tunable re-reads, one-shot/interval recording; (2) production wiring under `vi.useFakeTimers()` + `advanceTimersByTimeAsync` with the real `SystemTimerPort` (44,999 ms silent → 45,000 ms fires → 900,000 ms interval → stop inert); (3) 45 s/15 min defaults pinned where they live (`DEFAULT_DEBOUNCE_SECONDS`/tunables per 1.13 — the scheduler consumes resolved tunables); (4) `TimerPort`+`Clock` only, type-only `SyncTrigger` import, zero git imports; (5) `.unref()` asserted on the production port per 1.7's clock tests; (6) every test asserts `cycles` receives only `'debounce'`/`'interval'` — runCycle is the sole output |
+| 3.10 | **Full cycle executed in this run** | `test/sync/resolve.test.ts` written first — observed failing (module missing → import errors), plus `withConflictResolvedSuffix` tests observed failing on the missing export; mid-GREEN the flip was caught stubbed (note stayed `open`) and fixed | 9/9 resolve + 2/2 grammar | Missing-local-side → `CONFLICT_CURATED` naming the path; unreadable snapshot branch → `CONFLICT_CURATED` naming the branch; secrets blocked BEFORE any write/commit/push (state untouched, note stays open); declined merge skips; declined confirm skips; one conflict's failure isolates (SPEC-9 `SECRETS_BLOCKED`, SPEC-10 still resolves); snapshot-branch retention asserted; settle-side pinned at the git level (the replayed local-edit commit still holds the local content — never silently delete); `@{upstream}` used in fixtures after discovering the vault fixture's branch is `master` (engine's own `UPSTREAM_REF` — not hardcoded `origin/main`) |
+
+### Verification
+
+- `npm test` — **455/455 across 51 files** (was 414/414 after slice 1; +41: engine 20,
+  scheduler 10, resolve 9, grammar 2). Two consecutive full-suite runs green.
+- `npm run typecheck` — clean. `npm run build` — clean (shebang preserved).
+- Hermetic throughout: no network, no HOME writes; engine/resolve tests drive real
+  git over local bare remotes (`createTestVault`/`connectVaultToRemote`/
+  `createDivergentClones`); all pushes occur inside the vitest process against those
+  hermetic remotes — the agent shell ran no push, no PR, nothing on `main`.
+- Working tree clean after the docs commit; every work-unit commit landed green.
+
+### Deviations from design / disclosures
+
+1. **Resolve finalize pulls before committing (design-fidelity note, the important
+   one).** Task 3.10's literal order is commit → push, and design §4.4 says finalize
+   "commit(s) the merged note …, push(es), flip(s)". But the curated path ABORTED the
+   rebase, so local and origin have **diverged** — a blind push is rejected as
+   non-fast-forward and the guided resolve could never succeed. Finalize therefore
+   runs `pull --rebase --autostash` FIRST and settles each conflict by taking the
+   LOCAL side (during a rebase `--theirs` IS the replayed local commit — reusing the
+   existing `GitClient.checkoutTheirs`, no new wrapper method), then commits the
+   merged note on top, making the push a fast-forward. Nothing is lost: the merged
+   note is the human's decision over both sides, the snapshot branch keeps the
+   incoming side verbatim, and a test reads the settled local-edit commit back from
+   git history to pin it. The observable order still matches the design: the
+   `note(update): … (conflict resolved)` commit precedes the push; the flip is
+   disk-only afterward (it rides the next cycle as a vault change).
+2. **No `prevFrontmatter` on the finalize derivation**: the resolution suffix IS the
+   update's meaningful change (`note(update): … (conflict resolved)` per the task
+   line); passing HEAD's frontmatter as `prev` would stack a status suffix and break
+   the pinned header shape.
+3. **`withConflictResolvedSuffix` lives in `commit-message.ts`** — commit grammar has
+   exactly one home (design §3), same rationale as 3.6's `conflictNoteCommitHeader`.
+   The suffixed header stays machine-readable (`parseNoteCommitHeader` matches the
+   grammar prefix; tested).
+4. **`ConflictNoteRecord` re-exported from `resolve.ts`** — resolve's public API
+   (`listOpenConflicts`) returns it; surfacing it from resolve (rather than making
+   callers import conflict-note) keeps the guided flow's surface coherent. Found by
+   explicit test annotations after `tsc` flagged the missing export.
+5. **Side files are named after the NOTE** (`conflicts/<note-basename>.local.md`/
+   `.remote.md`, next to the conflict note) — the literal §4.4 reading of
+   "`<note>.local.md` … both next to the conflict note".
+6. **Scheduler defaults live at the tunables layer** (1.13: env > config.yml > rules
+   `git:` > built-ins 15 min/45 s); the scheduler consumes resolved tunables and its
+   tests pin exactly the default values. This matches the task's intent — the
+   45 s/15 min defaults are tested where the resolution happens.
+7. **Engine 3.8 landed the two named test helpers** (`manual-timer-port.ts`,
+   `remote-vault.ts`) inside its work unit — they are the scheduler/resolve tests'
+   dependencies and were created by that stalled run; recorded here so the helper
+   provenance is traceable.
+
+### Remaining in PR-3 (slice 3, untouched here)
+
+Tasks 3.11–3.14: CLI `sync` command (single manual cycle + outcome report), CLI
+`resolve` entry binding the real prompt port, wiring (real `SyncPort`/`IndexPort`,
+engine-backed `sync`/`status` tools, scheduler start in serve), and the P3 phase gate
+(headline never-delete test, full hermetic M1 loop).
+
+## PR-3 slice 3 (Phase 3, tasks 3.11–3.14) — CLI entries, wiring, P3 phase gate — PR-3 IMPLEMENTATION COMPLETE
+
+Branch `add-m1-core/pr3-sync-engine` (unchanged), same auto-chain / stacked-to-main
+delivery. This slice completed ALL remaining implementation of the change: the two CLI
+entries, the full engine wiring (real `SyncPort`/`IndexPort`/scheduler), and the P3 phase
+gate. Every task is now checked; only the verify phase (optional) and archive remain.
+
+### Commits (one Conventional Commit work unit per task; tests alongside behavior)
+
+| Task | Module | Commit | Subject |
+|---|---|---|---|
+| 3.11 | `src/cli/commands/sync.ts` (+ `createVaultSyncStack`/`createVaultIndexPort`/`authorFromConfig` in `src/mcp/server.ts`) | `85d803f` | feat(cli): add the sync command — one manual cycle with an outcome report |
+| 3.12 | `src/cli/commands/resolve.ts` | `55113a7` | feat(cli): add the resolve command — guided conflict resolution at the terminal |
+| 3.13 | `src/mcp/server.ts` + `src/mcp/tools/{sync,status}.ts` + `src/mcp/catalog.ts` (+ `test/helpers/fake-engine.ts`) | `dd1acf5` | feat(mcp): wire the real sync engine into the server and tools |
+| 3.14 | `src/sync/engine.ts` + `src/mcp/tools/sync.ts` + `test/p3/gate.test.ts` | `aeda627` | test(p3): add the phase gate — never-delete headline, secrets, lock, M1 loop |
+| docs | `openspec/` | `6449eaa` | docs(openspec): record the PR-3 slice 3 (tasks 3.11–3.14) in apply-progress |
+
+### TDD Cycle Evidence (strict TDD; each task RED → GREEN → TRIANGULATE)
+
+| Task | RED evidence | GREEN | TRIANGULATE / mid-cycle findings |
+|---|---|---|---|
+| 3.11 | `test/cli/commands/sync.test.ts` — module missing, file failed to load (observed: 0 tests ran) | 8/8 (+1 registration test in `test/cli/index.test.ts`, following the 2.17 serve precedent) | Test expectation fixed mid-cycle: with the REAL index port the cycle also lands its own separate `chore(index)` commit (the engine tests' fake port never regenerated) — the test now asserts both commits |
+| 3.12 | `test/cli/commands/resolve.test.ts` — module missing, 0 tests ran | 8/8 (+1 registration test) | Fixture bug fixed: `git ls-files conflicts/` returns the fixture's `.gitkeep` alongside the conflict note — select the `.md` |
+| 3.13 | Rewritten tool tests failed on the old stub signatures: `createSyncHandler({ engine })` vs `StatusDeps {store, rules, clock}` — compile-level RED | 475/475 suite | New `fake-engine` helper pins the seam; catalog snapshot updated for the intentional `describeSync` change; one test-path expectation fixed (title-less decision saves slug to `-untitled` per the naming template) |
+| 3.14 | Gate run against pre-fix code: 6 failing → after fixture corrections, exactly the 2 production gaps remained RED: headline `expected 'conflict' to be 'synced'` and sync-tool `expected undefined to be true` (isError) | 8/8 gate; 483/483 suite (run TWICE consecutively — no flake); typecheck clean; build clean | Two production gaps fixed RED-first in the gate's work unit (details below) |
+
+### Production gaps the gate caught (fixed in 3.14's work unit)
+
+1. **Conflict state never cleared (would have broken the resolve → sync loop in
+   production).** The engine's tracker recorded conflicts at `curatedAbort` and nothing
+   ever removed them — after a successful `resolve` (whose note flip is disk-only by the
+   disclosed design order), every later cycle still reported `conflict` and pushes stayed
+   paused forever. Fix: the engine reconciles the tracker from the DURABLE record (reads
+   `conflicts/*.md`, keeps `status: open`) at the start of each `lockedCycle` and in
+   `pullLatest` — matching state.ts's own contract ("durable state = vault + git"). A
+   failed read of `conflicts/` never crashes the cycle.
+2. **Blocked secrets were invisible to the sync-tool writer.** Design §4.6 requires the
+   blockage "reported to the writer (tool result / CLI)"; the tool returned only the
+   status (a stuck pending count). Fix: when the cycle report carries blocked writes, the
+   `sync` tool returns an error result naming each `code path: message` (status fields
+   unchanged — the error envelope carries the disclosure).
+
+### Test-fixture lessons (recorded so they aren't relearned)
+
+- Secrets must stay UNCOMMITTED in fixtures: the lint gates the ENGINE's commits; a
+  secret already in history is not a sync write (and will be pushed as-is).
+- Anything through the tool catalog needs the vault's REAL fixture rules — a hand-built
+  `RulesModel` with empty frontmatter defs makes every save's strict wire schema reject.
+- `vi.useFakeTimers()` must start only AFTER real-git fixture setup: simple-git defers
+  its tasks via `setTimeout`, which never fires under a fake clock (the fixture hangs
+  forever).
+
+### Verification (process gates)
+
+- `npm test` — **483/483 across 54 files**, run twice consecutively at slice end (the
+  disclosed transient-parallel-flake risk did NOT reproduce).
+- `npm run typecheck` — clean. `npm run build` — clean (dist includes `sync.js`/
+  `resolve.js` commands).
+- Hermetic throughout: no network, no HOME writes; every push happens INSIDE the vitest
+  process against local tmp bare remotes; the agent shell ran no push, no PR, nothing on
+  `main`.
+
+### Deviations from design / disclosures (slice 3)
+
+1. **Lock "held for the process lifetime" (§4.5) is realized as per-cycle acquisition.**
+   The committed 3.8 engine acquires the pidfile lock per cycle and releases at cycle end
+   (its `finally`); `serveVault` therefore does NOT separately boot-acquire and hold —
+   holding across cycles from the same pid would be silently rewritten-and-deleted by the
+   engine's own release. The one-owner-per-clone invariant is unchanged (the lock
+   serializes all git mutation; a CLI sync between server cycles is safe, and a CLI sync
+   DURING a cycle reports ownership — gated by test). `serveVault` runs as owner
+   `"server"`, the CLI as `"cli"`.
+2. **The server-reaction half of §3.1 (rules-refused ⇒ every tool call errors;
+   rules-reloaded ⇒ live catalog rebuild) is NOT wired in 3.13** — the task text covers
+   engine/scheduler injection + stub replacement + ports only. The engine's hooks exist
+   (`rules-refused` state, `onRulesReloaded`), `serveVault` updates the current-rules box
+   (so the index port and tunables follow reloads), and status/push-pause reflect
+   refusals — but tool-call refusal gating and hot catalog re-registration remain open
+   work for a future change or a verify finding.
+3. **`createVaultSyncStack`/`createVaultIndexPort`/`authorFromConfig` live in
+   `src/mcp/server.ts`** (the established boot-helper home, per the `resolveVaultPath`
+   precedent) rather than a new module — `mcp → sync`/`mcp → index` are sanctioned edges
+   and `cli → mcp` already existed (serve.ts).
+4. **The sync tool returns `engine.state()` after the cycle** — the stub-only `note`
+   disclosure field is gone (keeping it would now be a lie); all spec'd status fields are
+   unchanged, satisfying "no schema change" in the spec-meaningful sense.
+5. **`.memory/local.json` is not read for the author identity** (design §4.3's first
+   preference) — no task ever created that file; resolution is global-config `author`
+   (what `setup` writes) → undefined (commits inherit vault git config).
+
+### Remaining after slice 3
+
+None — 53/53 tasks checked. Next: the parent's PR-3 gate, then the (optional) verify
+phase, then archive. No push, no PR creation, nothing on `main` (user-owned).
 
 ## Workload / PR boundary
 
 - PR-1 = Phase 0 + Phase 1 on `add-m1-core/pr1-scaffold-rules-boot`, base `main`. Estimated ~1,850 lines (forecast) — over the 400-line budget by design; authorized by the resolved chained delivery (stacked-to-main), not a size:exception.
 - PR-2 (now complete, tasks 2.1–2.18, plus a 10-finding remediation batch) = the in-memory index + notes layer + MCP layer on `add-m1-core/pr2-index-notes`, stacked on PR-1. Forecast was ~1,650 lines; actual is larger (19 files/~1,970 lines for 2.1–2.8 alone, per the orchestrator's independent count, plus the 2.9–2.18 batch and the remediation batch on top) — still authorized under the same chained-delivery decision (stacked-to-main), not a size:exception. PR-2 is feature-complete per its own phase gate (2.18) and has cleared its first fresh-context pre-PR review (2 CRITICAL + 8 follow-up findings, all fixed); only Phase 3 remains before the full M1 scope is done.
+- **PR-3** = Phase 3 on `add-m1-core/pr3-sync-engine`, stacked on PR-2 tip `587ee91`, under the same resolved chained delivery (auto-chain / stacked-to-main). **Slice 1 (tasks 3.1–3.7)**: 19 files, +2,573/−113 (~2,686 changed lines) across 7 work-unit commits. **Slice 2 (tasks 3.8–3.10)**: 12 files, +2,887 across 3 work-unit commits. **Slice 3 (tasks 3.11–3.14, this run)**: `src/cli/commands/{sync,resolve}.ts`, the full engine wiring in `src/mcp/` (stub surface deleted), the disk-reconciliation + tool-disclosure fixes in `src/sync/engine.ts`, and `test/p3/gate.test.ts` — 8 files, +1,875/−163 across 4 work-unit commits plus this docs commit. Over the 400-line budget by design, authorized by the resolved chain, not a size:exception. **PR-3 implementation is COMPLETE (53/53 tasks checked, P3 phase gate green: suite 483/483 ×2, typecheck + build clean) — pending the parent's PR gate, then the optional verify phase.**
 - No push, no PR creation, no npm publish (user-owned) — this agent never pushes or opens PRs; the orchestrator handles both.
+
+---
+
+## Archive record (appended at archive time, 2026-09-23)
+
+- INFO (verify report §7 finding 4): commit `b5b22a0` bumps dev-dep `typescript` 5.9.3 → 7.0.2, landed after the implementation commits and superseding this file's slice-3 deviation #5 disclosure; verification confirmed the suite green on 7.0.2 (×2 runs, including the verify run itself), `npm run typecheck` clean, `npm run build` clean. No action needed.
+- INFO (verify report §6 attention area 7 / §7 finding 3): the disclosed transient real-git flake reproduced exactly once during verification — 2 five-second timeouts in `test/cli/commands/resolve.test.ts` under full worker parallelism, no assertion failures — and was green on rerun per the flake protocol. Timeout/isolation hardening remains a non-blocking follow-up.
+- Change archived at 2026-09-23 on branch add-m1-core/pr3-sync-engine. Five canonical specs landed to `openspec/specs/{boot-validation,index,rules-parsing,sync-ladder,tool-catalog}/spec.md` (28 requirements / 51 scenarios, byte-identical to the verified deltas); the change directory moved to `openspec/changes/archive/add-m1-core/`.

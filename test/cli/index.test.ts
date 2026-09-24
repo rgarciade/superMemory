@@ -25,6 +25,20 @@ describe("buildProgram", () => {
     expect(names).toContain("serve");
   });
 
+  // Task 3.11: sync wired into the composition root (the manual trigger).
+  it("registers the P3 sync subcommand", () => {
+    const program = buildProgram();
+    const names = program.commands.map((c) => c.name());
+    expect(names).toContain("sync");
+  });
+
+  // Task 3.12: resolve wired into the composition root (guided conflicts).
+  it("registers the P3 resolve subcommand", () => {
+    const program = buildProgram();
+    const names = program.commands.map((c) => c.name());
+    expect(names).toContain("resolve");
+  });
+
   it("exposes help and version", () => {
     const program = buildProgram();
     expect(program.version()).toMatch(/^\d+\.\d+\.\d+/);

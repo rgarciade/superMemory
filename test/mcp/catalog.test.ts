@@ -142,15 +142,18 @@ describe("buildCatalog", () => {
     expect(save?.description).toContain("decision_id");
   });
 
-  // Fresh-context review finding 6: describeSync promised "pull, commit
-  // pending writes, push" with no hint that P2 ships it as a no-op stub —
-  // the disclaimer only lived in the response `note` field, never in the
-  // description an agent reads before calling the tool.
-  it("sync tool description discloses it is a P2 stub, not an active engine trigger", async () => {
+  // Task 3.13: the tool drives the REAL engine now — the description
+  // describes the actual behavior honestly (no stub language anywhere;
+  // the response `note` disclosure field is gone with it).
+  it("sync tool description describes the real engine trigger, with no stub disclosure", async () => {
     const rules = await loadRules();
     const catalog = buildCatalog(rules);
     const sync = catalog.tools.find((t) => t.name === "sync");
-    expect(sync?.description).toMatch(/P3/);
+    const description = sync?.description ?? "";
+    expect(description).toMatch(/Trigger an immediate sync cycle/);
+    expect(description).toMatch(/push/);
+    expect(description).not.toMatch(/stub/i);
+    expect(description).not.toMatch(/P3/);
   });
 
   it("catalog snapshot: tool names and descriptions are stable for a given rules model", async () => {

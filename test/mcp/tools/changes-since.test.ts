@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildCatalog } from "../../../src/mcp/catalog.js";
-import {
-  createChangesSinceHandler,
-  parseNoteCommitHeader,
-} from "../../../src/mcp/tools/changes-since.js";
+import { createChangesSinceHandler } from "../../../src/mcp/tools/changes-since.js";
 import { parseRules } from "../../../src/rules/parser.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -15,8 +12,9 @@ import { createToolTestClient } from "../../helpers/create-tool-test-client.js";
 
 // Task 2.14 [RED first]: changes_since — ISO timestamp -> git-log walk
 // filtered to note-grammar commits, classified added/updated/
-// status_changed/removed from deterministic headers (local header-parser
-// here; unified into src/sync/commit-message.ts in P3).
+// status_changed/removed from deterministic headers. The header parser
+// itself now lives in src/sync/commit-message.ts (task 3.2 absorbed it —
+// one grammar home); its unit tests moved to test/sync/commit-message.test.ts.
 
 const execFileAsync = promisify(execFile);
 
@@ -37,31 +35,6 @@ async function commitAt(vault: TestVault, message: string, isoDate: string): Pro
     env: { ...process.env, GIT_AUTHOR_DATE: isoDate, GIT_COMMITTER_DATE: isoDate },
   });
 }
-
-describe("parseNoteCommitHeader", () => {
-  it("parses an add header with an id", () => {
-    const parsed = parseNoteCommitHeader('note(add): decision "Use an in-memory index" [DEC-1]');
-    expect(parsed).toEqual({ op: "add", type: "decision", title: "Use an in-memory index", id: "DEC-1", statusChanged: false });
-  });
-
-  it("parses an update header with a status-change suffix", () => {
-    const parsed = parseNoteCommitHeader(
-      'note(update): decision "Use an in-memory index" [DEC-1] (status: proposed→accepted)',
-    );
-    expect(parsed?.op).toBe("update");
-    expect(parsed?.statusChanged).toBe(true);
-  });
-
-  it("parses a header with no id (e.g. a session log)", () => {
-    const parsed = parseNoteCommitHeader('note(add): session_log "Session 2026-01-01"');
-    expect(parsed?.id).toBeUndefined();
-    expect(parsed?.type).toBe("session_log");
-  });
-
-  it("returns undefined for a commit message that isn't note grammar", () => {
-    expect(parseNoteCommitHeader("chore: baseline docs + openspec")).toBeUndefined();
-  });
-});
 
 describe("changes_since (in-memory transport)", () => {
   it("lists each affected note exactly once, correctly classified, since a given timestamp", async () => {

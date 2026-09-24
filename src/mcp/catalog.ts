@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type { FieldDef, NoteTypeDef, RulesModel } from "../rules/types.js";
-import { ENGINE_STUB_NOTE } from "./tools/status.js";
 
 /**
  * Pure `buildCatalog(rules)` (design §5.2, tool-catalog spec): exactly six
@@ -202,14 +201,14 @@ function describeChangesSince(): string {
 }
 
 function describeSync(): string {
-  // Fresh-context review finding 6: state the P2 stub status in the
-  // description itself, not only in the response `note` field — an
-  // agent reads the description BEFORE deciding whether to call the
-  // tool, and describing an action the handler doesn't yet perform
-  // (pull/commit/push) without saying so there is misleading.
+  // P3 wiring (task 3.13): the tool drives the REAL engine now, so the
+  // description describes the real behavior honestly — no stub language.
+  // The cycle is the same ONE code path the CLI and the scheduler use:
+  // serialized behind the vault's sync lock, never force-pushing.
   return (
     "Trigger an immediate sync cycle (pull, commit pending writes, push) and return the " +
-    `resulting status. Currently a documented stub: ${ENGINE_STUB_NOTE}.`
+    "resulting sync status. The cycle is serialized behind the vault's sync lock and " +
+    "never force-pushes; safe to call at any time."
   );
 }
 
