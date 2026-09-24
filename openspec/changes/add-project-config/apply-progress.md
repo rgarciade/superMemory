@@ -361,3 +361,15 @@ the real tip; the hash in the task text is stale, not the chain.
 - Superseding evidence: 537/537 twice consecutively under real machine load, typecheck clean. The
   gate verdict stands WITH this hardening as part of the change; the pre-hardening double-green
   claim above is retracted.
+
+### Post-gate UX addition: setup vault-path tab completion
+
+- Maintainer request during dogfooding: Tab directory-completion on the wizard's vault-path
+  prompt. `@inquirer/input` 5.1.6 (latest) has no completer support, so a thin `directoryInput`
+  prompt was built on `@inquirer/core` 12.0.3 (promoted to direct dependency): pure
+  `completeVaultPath(fragment, cwd, homeDir)` helper (unique match drills deeper with trailing
+  slash; ambiguity renders up to 8 rows + longest-common-prefix extension; `~` via injected
+  home; dotfiles opt-in) + console-edge wiring in `consolePrompts.vaultPath`.
+- PromptPort/scriptedPort seam untouched; 11 new helper tests; full suite 548/548 across 56
+  files; typecheck + build clean. Commits: setup completion + lockfile promotion on
+  `add-project-config/pr5-rfc-docs`.
