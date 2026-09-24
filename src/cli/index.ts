@@ -5,6 +5,7 @@ import { Command, CommanderError } from "commander";
 import pkg from "../../package.json" with { type: "json" };
 import { AppError } from "../util/errors.js";
 import { registerInitCommand } from "./commands/init.js";
+import { registerServeCommand } from "./commands/serve.js";
 import { registerSetupCommand } from "./commands/setup.js";
 
 /**
@@ -24,6 +25,7 @@ export function buildProgram(): Command {
     .version(pkg.version);
   registerInitCommand(program);
   registerSetupCommand(program);
+  registerServeCommand(program);
   return program;
 }
 

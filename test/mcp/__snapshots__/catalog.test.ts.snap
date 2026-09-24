@@ -1,0 +1,30 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildCatalog > catalog snapshot: tool names and descriptions are stable for a given rules model 1`] = `
+[
+  {
+    "description": "Search the vault by property filters (type, status, spec_id, tags, owner, date range) and/or free text. Declared note types: spec, decision, incident, session_log. Results are filtered and deterministically ordered — not relevance-ranked.",
+    "name": "find",
+  },
+  {
+    "description": "Read a note's content and frontmatter plus its knowledge neighborhood: backlinks (wikilinks and spec_id references), referenced specs' status, and the most recently linked decisions/incidents.",
+    "name": "read_with_context",
+  },
+  {
+    "description": "Create or update a note of a declared type. A non-conforming save is rejected with the violated rule. Declared types: spec (folder: specs/, naming: {spec_id}-{slug}.md, required: spec_id, status, owner); decision (folder: decisions/, naming: {decision_id}-{slug}.md, required: decision_id, spec_id); incident (folder: incidents/, required: incident_id); session_log (folder: logs/, required: date, actor).",
+    "name": "save",
+  },
+  {
+    "description": "Report what changed in the vault since a given ISO timestamp, at note granularity, classified as added, updated, status_changed, or removed.",
+    "name": "changes_since",
+  },
+  {
+    "description": "Trigger an immediate sync cycle (pull, commit pending writes, push) and return the resulting status. Currently a documented stub: engine lands in P3; supermemory sync / plain git still work.",
+    "name": "sync",
+  },
+  {
+    "description": "Report sync state: last successful sync, pending local writes, unresolved conflicts, stale notes (staleness field: review_after), and the vault format version.",
+    "name": "status",
+  },
+]
+`;

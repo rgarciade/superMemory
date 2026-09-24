@@ -18,6 +18,13 @@ describe("buildProgram", () => {
     expect(names).toContain("setup");
   });
 
+  // Task 2.17: serve wired into the composition root alongside init/setup.
+  it("registers the P2 serve subcommand", () => {
+    const program = buildProgram();
+    const names = program.commands.map((c) => c.name());
+    expect(names).toContain("serve");
+  });
+
   it("exposes help and version", () => {
     const program = buildProgram();
     expect(program.version()).toMatch(/^\d+\.\d+\.\d+/);
