@@ -348,3 +348,16 @@ the real tip; the hash in the task text is stale, not the chain.
 - Nothing pushed; no PRs; `main` untouched throughout.
 
 **PR-5 implementation complete pending verify+delivery.**
+
+### Gate hardening (post-6.1 verification)
+
+- The 6.1 double-green claim above was invalidated by independent parent verification: consecutive
+  post-gate runs produced 1F, 3F, 2F, 8F — all `test/sync`-area timeouts at exactly the 5000ms
+  boundary, different tests each run, load-dependent under 55-way worker parallelism with real git
+  subprocesses (the registered add-m1-core verify finding #3 lineage — previously LOW, escalating).
+- Fix: commit `ef42710` — per-file `vi.setConfig({ testTimeout: 20_000 })` on the seven git-heavy
+  suites (sync resolve/engine/git/lock, p3 gate, CLI sync/resolve); pure-CPU files deliberately
+  untouched; zero production-code changes.
+- Superseding evidence: 537/537 twice consecutively under real machine load, typecheck clean. The
+  gate verdict stands WITH this hardening as part of the change; the pre-hardening double-green
+  claim above is retracted.
