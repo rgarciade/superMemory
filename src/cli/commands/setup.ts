@@ -15,7 +15,15 @@ import {
   EXAMPLE_CONFIG_FILENAME,
   findProjectRoot,
   PROJECT_CONFIG_FILENAME,
+  DEBOUNCE_SECONDS_BOUNDS,
+  SYNC_INTERVAL_MINUTES_BOUNDS,
+  isValidDebounceSeconds,
+  isValidSyncIntervalMinutes,
 } from "../../config/project-config.js";
+import {
+  DEFAULT_DEBOUNCE_SECONDS,
+  DEFAULT_SYNC_INTERVAL_MINUTES,
+} from "../../config/vault-config.js";
 
 /**
  * `supermemory setup` — the per-project wizard (specs/project-config):
@@ -44,6 +52,10 @@ export interface PromptPort {
   authorName(message: string, defaultValue?: string): Promise<string>;
   authorEmail(message: string, defaultValue?: string): Promise<string>;
   confirm(message: string): Promise<boolean>;
+  /** Raw answer for the debounce window (seconds); validated by the wizard. */
+  debounceSeconds(message: string, defaultValue: number): Promise<string>;
+  /** Raw answer for the pull interval (minutes); validated by the wizard. */
+  syncIntervalMinutes(message: string, defaultValue: number): Promise<string>;
 }
 
 export const consolePrompts: PromptPort = {
@@ -59,6 +71,10 @@ export const consolePrompts: PromptPort = {
       ? input({ message })
       : input({ message, default: defaultValue }),
   confirm: (message) => confirm({ message }),
+  debounceSeconds: (message, defaultValue) =>
+    input({ message, default: String(defaultValue) }),
+  syncIntervalMinutes: (message, defaultValue) =>
+    input({ message, default: String(defaultValue) }),
 };
 
 export interface SetupResult {
@@ -66,6 +82,10 @@ export interface SetupResult {
   root: string;
   vault: string;
   author: { name: string; email: string };
+  /** Debounce window in seconds (default 45). */
+  debounceSeconds: number;
+  /** Pull interval in minutes (default 15). */
+  syncIntervalMinutes: number;
   /**
    * Path of a legacy global config (`~/.config/supermemory/config.json`
    * under the injected home) when one exists — surfaced informationally
@@ -75,6 +95,34 @@ export interface SetupResult {
 }
 
 const MAX_VAULT_ATTEMPTS = 5;
+const MAX_TIMING_ATTEMPTS = 5;
+
+/**
+ * Asks for one timing knob until the answer is a whole number within
+ * bounds; an empty answer accepts the default. After
+ * MAX_TIMING_ATTEMPTS invalid answers the wizard aborts (nothing written).
+ */
+async function askTiming(
+  ask: (message: string, defaultValue: number) => Promise<string>,
+  label: string,
+  unit: string,
+  defaultValue: number,
+  bounds: { min: number; max: number },
+  isValid: (value: unknown) => boolean,
+): Promise<number> {
+  const message = `${label} (${unit}, ${bounds.min}-${bounds.max}):`;
+  for (let attempt = 0; attempt < MAX_TIMING_ATTEMPTS; attempt += 1) {
+    const answer = (await ask(message, defaultValue)).trim();
+    if (answer === "") return defaultValue;
+    const value = /^\d+$/.test(answer) ? Number(answer) : Number.NaN;
+    if (isValid(value)) return value;
+  }
+  throw new AppError(
+    "INVALID_SYNC_SETTING",
+    `${label} must be a whole number of ${unit} between ${bounds.min} and ${bounds.max}.`,
+    { hint: "Re-run `supermemory setup` and enter a valid value." },
+  );
+}
 
 const LEGACY_GLOBAL_CONFIG_PATH = (homeDir: string): string =>
   path.join(homeDir, ".config", "supermemory", "config.json");
@@ -156,6 +204,24 @@ export async function runSetup(
   )).trim();
   const author = { name, email };
 
+  // (2b) sync timing — defaults equal the built-ins (45 s / 15 min)
+  const debounceSeconds = await askTiming(
+    (m, d) => prompts.debounceSeconds(m, d),
+    "Debounce after last write before syncing",
+    "seconds",
+    DEFAULT_DEBOUNCE_SECONDS,
+    DEBOUNCE_SECONDS_BOUNDS,
+    isValidDebounceSeconds,
+  );
+  const syncIntervalMinutes = await askTiming(
+    (m, d) => prompts.syncIntervalMinutes(m, d),
+    "Pull interval between background syncs",
+    "minutes",
+    DEFAULT_SYNC_INTERVAL_MINUTES,
+    SYNC_INTERVAL_MINUTES_BOUNDS,
+    isValidSyncIntervalMinutes,
+  );
+
   // (3) confirm — every write below happens only after confirmation,
   // so a decline (like the 5-attempt abort) writes nothing.
   const ok = await prompts.confirm(
@@ -171,8 +237,17 @@ export async function runSetup(
   // (4) write the three artifacts at the WORK-TREE ROOT (AD-2): the
   // same root `findProjectRoot` resolves for every later launch.
   // Fresh write, never a merge — stale keys do not survive a rerun.
+  // Timing keys are written only when they differ from the built-in
+  // defaults, so default answers keep supermemory.json byte-identical.
   const content = JSON.stringify(
-    { vault, ...(author !== undefined ? { author } : {}) },
+    {
+      vault,
+      ...(author !== undefined ? { author } : {}),
+      ...(debounceSeconds !== DEFAULT_DEBOUNCE_SECONDS ? { debounceSeconds } : {}),
+      ...(syncIntervalMinutes !== DEFAULT_SYNC_INTERVAL_MINUTES
+        ? { syncIntervalMinutes }
+        : {}),
+    },
     null,
     2,
   );
@@ -195,6 +270,8 @@ export async function runSetup(
     root,
     vault,
     author,
+    debounceSeconds,
+    syncIntervalMinutes,
     ...(legacyConfigPath !== undefined ? { legacyConfigPath } : {}),
   };
 }

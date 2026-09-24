@@ -4,6 +4,7 @@ import { ProcessEnvSource } from "../../config/env.js";
 import {
   loadProjectConfig,
   projectAuthor,
+  projectSyncOverrides,
   resolveVaultPath,
 } from "../../config/project-config.js";
 import { buildIndex } from "../../index/build.js";
@@ -162,7 +163,8 @@ export async function runSyncCommand(input: SyncCommandInput): Promise<void> {
   // root — absent ⇒ undefined ⇒ commits inherit the vault's own Git
   // identity (the degradation path is the same injected optional dep as
   // before; only the source swapped).
-  const author = projectAuthor(await loadProjectConfig(input.basePath));
+  const projectConfig = await loadProjectConfig(input.basePath);
+  const author = projectAuthor(projectConfig);
 
   const { engine } = await createVaultSyncStack({
     vaultPath,
@@ -171,6 +173,7 @@ export async function runSyncCommand(input: SyncCommandInput): Promise<void> {
     clock: new SystemClock(),
     env,
     author,
+    projectSync: projectSyncOverrides(projectConfig),
     owner: "cli",
   });
 

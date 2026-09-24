@@ -8,6 +8,7 @@ import type { RulesModel } from "../rules/types.js";
  * sync tunables resolution (design §3.2):
  *
  *   env (SUPERMEMORY_SYNC_INTERVAL_MINUTES / SUPERMEMORY_DEBOUNCE_SECONDS)
+ *     > project supermemory.json (`syncIntervalMinutes` / `debounceSeconds`)
  *     > config.yml `sync:` section
  *     > rules.md `git:` block
  *     > built-ins (15 min / 45 s)
@@ -59,14 +60,17 @@ export function resolveSyncTunables(
   env: EnvSource,
   vaultConfig: VaultConfig | undefined,
   rules: RulesModel,
+  project?: { debounceSeconds?: number; syncIntervalMinutes?: number },
 ): SyncTunables {
   const intervalMinutes =
     readNumber(env, ENV_KEYS.syncIntervalMinutes) ??
+    project?.syncIntervalMinutes ??
     vaultConfig?.sync?.sync_interval_minutes ??
     rules.git.syncIntervalMinutes ??
     DEFAULT_SYNC_INTERVAL_MINUTES;
   const debounceSeconds =
     readNumber(env, ENV_KEYS.debounceSeconds) ??
+    project?.debounceSeconds ??
     vaultConfig?.sync?.debounce_seconds ??
     rules.git.debounceSeconds ??
     DEFAULT_DEBOUNCE_SECONDS;

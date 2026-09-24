@@ -14,6 +14,10 @@ import {
   projectAuthor,
   projectConfigPath,
   resolveVaultPath,
+  DEBOUNCE_SECONDS_BOUNDS,
+  SYNC_INTERVAL_MINUTES_BOUNDS,
+  isValidDebounceSeconds,
+  isValidSyncIntervalMinutes,
 } from "../../src/config/project-config.js";
 import type { EnvSource } from "../../src/config/env.js";
 import { makeProjectDir } from "../helpers/project.js";
@@ -389,6 +393,64 @@ describe("pre-placed example bytes round-trip (fixture sanity for later slices)"
       expect(await readFile(path.join(project.root, EXAMPLE_CONFIG_FILENAME), "utf8")).toBe(
         committed,
       );
+    } finally {
+      await project.cleanup();
+    }
+  });
+});
+
+describe("sync timing overrides (issue #5)", () => {
+  it("exposes the documented bounds", () => {
+    expect(DEBOUNCE_SECONDS_BOUNDS).toEqual({ min: 1, max: 3600 });
+    expect(SYNC_INTERVAL_MINUTES_BOUNDS).toEqual({ min: 1, max: 1440 });
+  });
+
+  it("validates positive integers within bounds only", () => {
+    expect(isValidDebounceSeconds(1)).toBe(true);
+    expect(isValidDebounceSeconds(3600)).toBe(true);
+    for (const bad of [0, -5, 3601, 1.5, Number.NaN, Infinity, "45", null, undefined]) {
+      expect(isValidDebounceSeconds(bad)).toBe(false);
+    }
+    expect(isValidSyncIntervalMinutes(1)).toBe(true);
+    expect(isValidSyncIntervalMinutes(1440)).toBe(true);
+    for (const bad of [0, -1, 1441, 2.5, Number.NaN, "15", null]) {
+      expect(isValidSyncIntervalMinutes(bad)).toBe(false);
+    }
+  });
+
+  it("loads valid overrides alongside the vault", async () => {
+    const project = await makeProjectDir({
+      config: { vault: ABSOLUTE_VAULT, debounceSeconds: 10, syncIntervalMinutes: 5 },
+    });
+    try {
+      expect(await loadProjectConfig(project.root)).toEqual({
+        vault: ABSOLUTE_VAULT,
+        debounceSeconds: 10,
+        syncIntervalMinutes: 5,
+      });
+    } finally {
+      await project.cleanup();
+    }
+  });
+
+  it("omits the keys when absent (defaults preserved)", async () => {
+    const project = await makeProjectDir({ config: { vault: ABSOLUTE_VAULT } });
+    try {
+      expect(await loadProjectConfig(project.root)).toEqual({ vault: ABSOLUTE_VAULT });
+    } finally {
+      await project.cleanup();
+    }
+  });
+
+  it("drops invalid overrides individually without losing the vault", async () => {
+    const project = await makeProjectDir({
+      config: { vault: ABSOLUTE_VAULT, debounceSeconds: -3, syncIntervalMinutes: 20 },
+    });
+    try {
+      expect(await loadProjectConfig(project.root)).toEqual({
+        vault: ABSOLUTE_VAULT,
+        syncIntervalMinutes: 20,
+      });
     } finally {
       await project.cleanup();
     }

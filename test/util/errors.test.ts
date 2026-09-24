@@ -31,6 +31,8 @@ describe("AppError", () => {
       // add-project-config AD-2: setup refuses the home root and any
       // location outside a Git work tree (one code added, none removed).
       SETUP_LOCATION_REFUSED: "SETUP_LOCATION_REFUSED",
+      // issue #5: setup aborts after repeated invalid timing input.
+      INVALID_SYNC_SETTING: "INVALID_SYNC_SETTING",
     });
   });
 
