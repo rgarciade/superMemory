@@ -1,23 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { buildIndex } from "../../src/index/build.js";
-import { createServer, resolveVaultPath } from "../../src/mcp/server.js";
+import { createServer, serveVault } from "../../src/mcp/server.js";
+import {
+  loadProjectConfig,
+  projectAuthor,
+  resolveVaultPath,
+} from "../../src/config/project-config.js";
 import { RULES_RESOURCE_URI } from "../../src/mcp/resources.js";
 import { NO_VAULT_CONFIGURED_MESSAGE, AppError } from "../../src/util/errors.js";
 import { parseRules } from "../../src/rules/parser.js";
 import type { RulesModel } from "../../src/rules/types.js";
-import { saveGlobalConfig, type GlobalConfig } from "../../src/config/global-config.js";
 import type { EnvSource } from "../../src/config/env.js";
 import { createTestVault, type TestVault } from "../helpers/create-test-vault.js";
 import { fakeEngine } from "../helpers/fake-engine.js";
+import { makeProjectDir } from "../helpers/project.js";
 
-// Task 2.16 [RED first]: server.ts — vault resolution, boot composition
-// (pure createServer, tested over InMemoryTransport), the exact
-// NO_VAULT_CONFIGURED message contract (design §5.1).
+// Task 2.16 [RED first], migrated by add-project-config W3 (task 3.1):
+// vault resolution is owned by config/project-config (the chain
+// serveVault itself boots through); the global-config fallback tests
+// became project-file tests (makeProjectDir + basePath), the
+// subdir-launch case pins AD-1 discovery, and the byte-pinned error
+// literal stays verbatim. Boot composition (pure createServer) is
+// tested over InMemoryTransport; the exact NO_VAULT_CONFIGURED message
+// contract is pinned below (design §5.1).
 
 function fakeEnv(values: Record<string, string | undefined>): EnvSource {
   return { get: (name) => values[name] };
@@ -30,38 +40,115 @@ async function loadRules(vaultRoot: string): Promise<RulesModel> {
 
 describe("resolveVaultPath", () => {
   it("prefers the --vault flag over everything else", async () => {
-    const env = fakeEnv({ SUPERMEMORY_VAULT: "/from/env", SUPERMEMORY_CONFIG_DIR: "/tmp/nope" });
-    const resolved = await resolveVaultPath("/from/flag", env);
-    expect(resolved).toBe("/from/flag");
+    const env = fakeEnv({ SUPERMEMORY_VAULT: "/from/env" });
+    const project = await makeProjectDir({ config: { vault: "/from/project" } });
+    try {
+      const resolved = await resolveVaultPath({
+        vaultFlag: "/from/flag",
+        env,
+        basePath: project.root,
+      });
+      expect(resolved).toBe("/from/flag");
+    } finally {
+      await project.cleanup();
+    }
   });
 
   it("falls back to SUPERMEMORY_VAULT when no flag is given", async () => {
     const env = fakeEnv({ SUPERMEMORY_VAULT: "/from/env" });
-    const resolved = await resolveVaultPath(undefined, env);
-    expect(resolved).toBe("/from/env");
+    const project = await makeProjectDir(); // work tree, no config file
+    try {
+      const resolved = await resolveVaultPath({
+        vaultFlag: undefined,
+        env,
+        basePath: project.root,
+      });
+      expect(resolved).toBe("/from/env");
+    } finally {
+      await project.cleanup();
+    }
   });
 
-  it("falls back to vaults.default in global config when neither flag nor env is set", async () => {
-    const configDir = await mkdtemp(path.join(os.tmpdir(), "supermemory-config-"));
-    const env = fakeEnv({ SUPERMEMORY_CONFIG_DIR: configDir });
-    const config: GlobalConfig = { vaults: { default: "/from/config" } };
-    await saveGlobalConfig(env, config);
+  it("falls back to the project file's vault when neither flag nor env is set", async () => {
+    const env = fakeEnv({});
+    const project = await makeProjectDir({ config: { vault: "/from/config" } });
+    try {
+      const resolved = await resolveVaultPath({
+        vaultFlag: undefined,
+        env,
+        basePath: project.root,
+      });
+      expect(resolved).toBe("/from/config");
+    } finally {
+      await project.cleanup();
+    }
+  });
 
-    const resolved = await resolveVaultPath(undefined, env);
-    expect(resolved).toBe("/from/config");
+  // AD-1: discovery walks up to the nearest Git work-tree root, so a
+  // launch from a subdirectory (e.g. a monorepo workspace spawn) finds
+  // the file setup wrote at the root — through the same chain
+  // serveVault boots with.
+  it("resolves the root project file from a subdirectory launch", async () => {
+    const env = fakeEnv({});
+    const project = await makeProjectDir({
+      config: { vault: "/from/root-config" },
+      nested: "packages/foo",
+    });
+    const subdir = project.subdir;
+    if (subdir === undefined) throw new Error("fixture: nested subdir missing");
+    try {
+      const resolved = await resolveVaultPath({
+        vaultFlag: undefined,
+        env,
+        basePath: subdir,
+      });
+      expect(resolved).toBe("/from/root-config");
+    } finally {
+      await project.cleanup();
+    }
+  });
+
+  // AD-7: the boot's commit identity comes from the same project file
+  // the chain reads — present ⇒ the configured human; absent ⇒
+  // undefined, and commits inherit the vault's Git identity.
+  it("exposes the project file's author as the boot commit identity", async () => {
+    const project = await makeProjectDir({
+      config: {
+        vault: "/from/config",
+        author: { name: "Raul", email: "raul@example.com" },
+      },
+    });
+    try {
+      const config = await loadProjectConfig(project.root);
+      expect(projectAuthor(config)).toEqual({ name: "Raul", email: "raul@example.com" });
+
+      const bare = await makeProjectDir({ config: { vault: "/from/config" } });
+      try {
+        expect(projectAuthor(await loadProjectConfig(bare.root))).toBeUndefined();
+      } finally {
+        await bare.cleanup();
+      }
+    } finally {
+      await project.cleanup();
+    }
   });
 
   it("fails with the exact spec-mandated message when nothing resolves", async () => {
-    const configDir = await mkdtemp(path.join(os.tmpdir(), "supermemory-config-"));
-    const env = fakeEnv({ SUPERMEMORY_CONFIG_DIR: configDir });
-
-    await expect(resolveVaultPath(undefined, env)).rejects.toThrow(AppError);
+    const env = fakeEnv({});
+    const bare = await mkdtemp(path.join(os.tmpdir(), "sm-unconfigured-"));
     try {
-      await resolveVaultPath(undefined, env);
-      expect.unreachable();
-    } catch (err) {
-      expect(err).toBeInstanceOf(AppError);
-      expect((err as AppError).message).toBe(NO_VAULT_CONFIGURED_MESSAGE);
+      await expect(
+        resolveVaultPath({ vaultFlag: undefined, env, basePath: bare }),
+      ).rejects.toThrow(AppError);
+      try {
+        await resolveVaultPath({ vaultFlag: undefined, env, basePath: bare });
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(AppError);
+        expect((err as AppError).message).toBe(NO_VAULT_CONFIGURED_MESSAGE);
+      }
+    } finally {
+      await rm(bare, { recursive: true, force: true });
     }
   });
 
@@ -69,15 +156,39 @@ describe("resolveVaultPath", () => {
   // the imported constant, so it would still pass even if
   // NO_VAULT_CONFIGURED_MESSAGE's value drifted from the spec wording —
   // tautological. Pin the literal spec-mandated string directly.
+  // (add-project-config 3.1: only the fixture — empty tmp dir +
+  // fakeEnv({}) — and the import changed; the pin is verbatim.)
   it("fails with the byte-exact literal spec wording, independent of the imported constant", async () => {
-    const configDir = await mkdtemp(path.join(os.tmpdir(), "supermemory-config-"));
-    const env = fakeEnv({ SUPERMEMORY_CONFIG_DIR: configDir });
-
+    const env = fakeEnv({});
+    const bare = await mkdtemp(path.join(os.tmpdir(), "sm-unconfigured-"));
     try {
-      await resolveVaultPath(undefined, env);
-      expect.unreachable();
-    } catch (err) {
-      expect((err as AppError).message).toBe("No vault configured. Run: supermemory setup");
+      try {
+        await resolveVaultPath({ vaultFlag: undefined, env, basePath: bare });
+        expect.unreachable();
+      } catch (err) {
+        expect((err as AppError).message).toBe("No vault configured. Run: supermemory setup");
+      }
+    } finally {
+      await rm(bare, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("serveVault boot resolution", () => {
+  // Boot-validation delta (add-project-config): unconfigured environment
+  // yields the setup command — the SERVER fails fast before serving
+  // anything. The chain (flag → SUPERMEMORY_VAULT → project file at
+  // basePath) has nothing to resolve in a bare launch tree with an
+  // empty env, so boot must end in the pinned error, never stdio.
+  it("fails fast with the pinned message when the launch tree configures no vault", async () => {
+    const bare = await mkdtemp(path.join(os.tmpdir(), "sm-unconfigured-"));
+    try {
+      await expect(serveVault({ env: fakeEnv({}), basePath: bare })).rejects.toMatchObject({
+        code: "NO_VAULT_CONFIGURED",
+        message: NO_VAULT_CONFIGURED_MESSAGE,
+      });
+    } finally {
+      await rm(bare, { recursive: true, force: true });
     }
   });
 });

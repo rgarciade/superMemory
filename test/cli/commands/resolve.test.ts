@@ -127,16 +127,32 @@ describe("registerResolveCommand", () => {
 
   it("passes the --vault flag through to the runner", async () => {
     const program = new Command().exitOverride();
-    const seen: Array<{ vaultFlag?: string; out: (line: string) => void }> = [];
+    const seen: Array<{ vaultFlag?: string; basePath?: string; out: (line: string) => void }> = [];
     registerResolveCommand(
       program,
-      async (input: { vaultFlag?: string; out: (line: string) => void }) => {
+      async (input: { vaultFlag?: string; basePath?: string; out: (line: string) => void }) => {
         seen.push(input);
       },
     );
     await program.parseAsync(["resolve", "--vault", "/path/to/vault"], { from: "user" });
     expect(seen).toHaveLength(1);
     expect(seen[0]?.vaultFlag).toBe("/path/to/vault");
+  });
+
+  // add-project-config 3.3 (AD-6): the commander action is the true
+  // ambient edge — the launch directory is injected here, nowhere else.
+  it("hands the runner the ambient cwd as basePath", async () => {
+    const program = new Command().exitOverride();
+    const seen: Array<{ vaultFlag?: string; basePath?: string; out: (line: string) => void }> = [];
+    registerResolveCommand(
+      program,
+      async (input: { vaultFlag?: string; basePath?: string; out: (line: string) => void }) => {
+        seen.push(input);
+      },
+    );
+    await program.parseAsync(["resolve"], { from: "user" });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.basePath).toBe(process.cwd());
   });
 });
 
@@ -151,6 +167,7 @@ describe("runResolveCommand (real engine conflict + scripted prompt)", () => {
       const merged = specNote("SPEC-9", "Merged Nine");
       await runResolveCommand({
         vaultFlag: vault.root,
+        basePath: vault.root,
         out: (line: string) => lines.push(line),
         prompt: scriptedPrompt(() => merged),
       });
@@ -190,6 +207,7 @@ describe("runResolveCommand (real engine conflict + scripted prompt)", () => {
       await expect(
         runResolveCommand({
           vaultFlag: vault.root,
+          basePath: vault.root,
           out: (line: string) => lines.push(line),
           prompt: scriptedPrompt(() => null),
         }),
@@ -208,6 +226,7 @@ describe("runResolveCommand (real engine conflict + scripted prompt)", () => {
       const lines: string[] = [];
       await runResolveCommand({
         vaultFlag: vault.root,
+        basePath: vault.root,
         out: (line: string) => lines.push(line),
         prompt: scriptedPrompt(() => null),
       });
@@ -228,6 +247,7 @@ describe("runResolveCommand (real engine conflict + scripted prompt)", () => {
       await expect(
         runResolveCommand({
           vaultFlag: vault.root,
+          basePath: vault.root,
           out: (line: string) => lines.push(line),
           prompt: scriptedPrompt(() => null),
         }),
@@ -251,6 +271,7 @@ describe("runResolveCommand (real engine conflict + scripted prompt)", () => {
       await expect(
         runResolveCommand({
           vaultFlag: vault.root,
+          basePath: vault.root,
           out: (line: string) => lines.push(line),
           prompt: scriptedPrompt(() => withSecret),
         }),
@@ -265,6 +286,9 @@ describe("runResolveCommand (real engine conflict + scripted prompt)", () => {
     await expect(
       runResolveCommand({
         vaultFlag: "/nonexistent/vault/for/resolve/test",
+        // Flag short-circuits resolution; basePath is required by the
+        // input contract (AD-6) and read here as a value only.
+        basePath: process.cwd(),
         out: () => {},
         prompt: scriptedPrompt(() => null),
       }),

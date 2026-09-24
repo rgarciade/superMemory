@@ -1,13 +1,13 @@
 import type { Command } from "commander";
 import { validateBoot } from "../../boot/validate-boot.js";
 import { ProcessEnvSource } from "../../config/env.js";
-import { loadGlobalConfig } from "../../config/global-config.js";
-import { buildIndex } from "../../index/build.js";
 import {
-  authorFromConfig,
-  createVaultSyncStack,
+  loadProjectConfig,
+  projectAuthor,
   resolveVaultPath,
-} from "../../mcp/server.js";
+} from "../../config/project-config.js";
+import { buildIndex } from "../../index/build.js";
+import { createVaultSyncStack } from "../../mcp/server.js";
 import { loadRules } from "../../rules/parser.js";
 import type { CycleReport } from "../../sync/engine.js";
 import { SystemClock } from "../../util/clock.js";
@@ -30,6 +30,12 @@ import { vaultPaths } from "../../util/paths.js";
 
 export interface SyncCommandInput {
   vaultFlag?: string;
+  /**
+   * Launch directory for project-config discovery (add-project-config
+   * AD-1). REQUIRED: the commander action (the true ambient edge)
+   * injects `process.cwd()`; tests inject the fixture root.
+   */
+  basePath: string;
   out: (line: string) => void;
 }
 
@@ -48,8 +54,13 @@ export function registerSyncCommand(
     )
     .action(async (opts: { vault?: string }) => {
       // The outcome report is the command's product: stdout (only `serve`
-      // reserves stdout for the MCP protocol — design §1.6).
-      await run({ vaultFlag: opts.vault, out: (line) => process.stdout.write(`${line}\n`) });
+      // reserves stdout for the MCP protocol — design §1.6). The launch
+      // directory is injected HERE — the one ambient edge (AD-6).
+      await run({
+        vaultFlag: opts.vault,
+        basePath: process.cwd(),
+        out: (line) => process.stdout.write(`${line}\n`),
+      });
     });
 }
 
@@ -136,12 +147,22 @@ function failureOf(report: CycleReport): AppError | undefined {
 /** Boots the real engine over the resolved vault and runs ONE manual cycle. */
 export async function runSyncCommand(input: SyncCommandInput): Promise<void> {
   const env = new ProcessEnvSource();
-  const vaultPath = await resolveVaultPath(input.vaultFlag, env);
+  // The spec-frozen chain (flag → SUPERMEMORY_VAULT → project file at the
+  // nearest work-tree root of basePath); unresolvable ⇒ the pinned
+  // NO_VAULT_CONFIGURED error from config/project-config.
+  const vaultPath = await resolveVaultPath({
+    vaultFlag: input.vaultFlag,
+    env,
+    basePath: input.basePath,
+  });
   await validateBoot(vaultPath);
 
   const rules = await loadRules(vaultPaths(vaultPath).rulesPath);
-  const globalConfig = await loadGlobalConfig(env);
-  const author = authorFromConfig(globalConfig);
+  // AD-7: the commit identity comes from the project config at the launch
+  // root — absent ⇒ undefined ⇒ commits inherit the vault's own Git
+  // identity (the degradation path is the same injected optional dep as
+  // before; only the source swapped).
+  const author = projectAuthor(await loadProjectConfig(input.basePath));
 
   const { engine } = await createVaultSyncStack({
     vaultPath,

@@ -12,6 +12,7 @@ import {
 import type { CycleReport } from "../../../src/sync/engine.js";
 import { createTestVault, type TestVault } from "../../helpers/create-test-vault.js";
 import { connectVaultToRemote, type RemoteVault } from "../../helpers/remote-vault.js";
+import { makeProjectDir } from "../../helpers/project.js";
 
 // Task 3.11 [RED first]: `supermemory sync` — a single runCycle('manual'),
 // an outcome report, and NO scheduler start (design §4.2: "the CLI `sync`
@@ -60,25 +61,34 @@ describe("registerSyncCommand", () => {
 
   it("passes the --vault flag through to the runner", async () => {
     const program = new Command().exitOverride();
-    const seen: Array<{ vaultFlag?: string; out: (line: string) => void }> = [];
-    registerSyncCommand(program, async (opts: { vaultFlag?: string; out: (line: string) => void }) => {
-      seen.push(opts);
-    });
+    const seen: Array<{ vaultFlag?: string; basePath?: string; out: (line: string) => void }> = [];
+    registerSyncCommand(
+      program,
+      async (opts: { vaultFlag?: string; basePath?: string; out: (line: string) => void }) => {
+        seen.push(opts);
+      },
+    );
     await program.parseAsync(["sync", "--vault", "/path/to/vault"], { from: "user" });
     expect(seen).toHaveLength(1);
     expect(seen[0]?.vaultFlag).toBe("/path/to/vault");
   });
 
-  it("hands the runner a stdout printer and no vault flag by default", async () => {
+  it("hands the runner a stdout printer, no vault flag, and the ambient cwd as basePath", async () => {
     const program = new Command().exitOverride();
-    const seen: Array<{ vaultFlag?: string; out: (line: string) => void }> = [];
-    registerSyncCommand(program, async (opts: { vaultFlag?: string; out: (line: string) => void }) => {
-      seen.push(opts);
-    });
+    const seen: Array<{ vaultFlag?: string; basePath?: string; out: (line: string) => void }> = [];
+    registerSyncCommand(
+      program,
+      async (opts: { vaultFlag?: string; basePath?: string; out: (line: string) => void }) => {
+        seen.push(opts);
+      },
+    );
     await program.parseAsync(["sync"], { from: "user" });
     expect(seen).toHaveLength(1);
     expect(seen[0]?.vaultFlag).toBeUndefined();
     expect(typeof seen[0]?.out).toBe("function");
+    // The commander action is the true ambient edge (add-project-config
+    // AD-6): the launch directory is injected here, nowhere else.
+    expect(seen[0]?.basePath).toBe(process.cwd());
   });
 });
 
@@ -146,7 +156,7 @@ describe("runSyncCommand (real boot over a hermetic vault + bare remote)", () =>
     const { vault, remote, bareTipBefore } = await vaultWithRemoteAndPendingWrite();
     try {
       const { io, lines } = captureOut();
-      await runSyncCommand({ vaultFlag: vault.root, out: outOf(io) });
+      await runSyncCommand({ vaultFlag: vault.root, basePath: vault.root, out: outOf(io) });
 
       const text = lines.join("\n");
       expect(text).toMatch(/sync outcome: synced/);
@@ -185,13 +195,15 @@ describe("runSyncCommand (real boot over a hermetic vault + bare remote)", () =>
       expect(handle).not.toBeNull();
 
       const { io, lines } = captureOut();
-      await expect(runSyncCommand({ vaultFlag: vault.root, out: outOf(io) })).rejects.toBeInstanceOf(
-        AppError,
-      );
       await expect(
-        runSyncCommand({ vaultFlag: vault.root, out: outOf(io) }).catch((err: unknown) => {
-          throw err;
-        }),
+        runSyncCommand({ vaultFlag: vault.root, basePath: vault.root, out: outOf(io) }),
+      ).rejects.toBeInstanceOf(AppError);
+      await expect(
+        runSyncCommand({ vaultFlag: vault.root, basePath: vault.root, out: outOf(io) }).catch(
+          (err: unknown) => {
+            throw err;
+          },
+        ),
       ).rejects.toMatchObject({ code: "LOCK_HELD" });
       expect(lines.join("\n")).toMatch(/sync outcome: locked/);
       expect(lines.join("\n")).toMatch(String(holder.pid));
@@ -204,6 +216,77 @@ describe("runSyncCommand (real boot over a hermetic vault + bare remote)", () =>
       await handle?.release();
     } finally {
       holder.kill();
+      await remote.cleanup();
+    }
+  });
+
+  // add-project-config 3.3 (AD-7, sync-ladder delta "Commit uses the
+  // project config author"): the commit identity comes from the project
+  // config at the launch root — the --vault flag is passed explicitly so
+  // this run is hermetic regardless of any ambient SUPERMEMORY_VAULT;
+  // the resolution chain itself is pinned by project-config's own suite
+  // and the server boot tests.
+  it("commits with the project config's author when the project file declares one", async () => {
+    const { vault, remote } = await vaultWithRemoteAndPendingWrite();
+    const project = await makeProjectDir({
+      config: {
+        vault: vault.root,
+        author: { name: "Project Author", email: "project@example.com" },
+      },
+    });
+    try {
+      const { io } = captureOut();
+      await runSyncCommand({
+        vaultFlag: vault.root,
+        basePath: project.root,
+        out: outOf(io),
+      });
+
+      // The engine lands exactly two commits (note + chore(index), the
+      // pinned shape above); BOTH carry the project author via --author.
+      const authors = (await simpleGit(vault.root).raw(["log", "--format=%an <%ae>", "-2"]))
+        .split("\n")
+        .filter((line) => line !== "");
+      expect(authors).toHaveLength(2);
+      for (const author of authors) {
+        expect(author).toBe("Project Author <project@example.com>");
+      }
+    } finally {
+      await project.cleanup();
+      await remote.cleanup();
+    }
+  });
+
+  // The degradation half (sync-ladder delta "Project config without
+  // author degrades to inherited Git identity"): no author in the file
+  // ⇒ author is undefined ⇒ the git client commits without --author and
+  // the vault repo's own local git config speaks. Same hermetic shape as
+  // the with-author case: the flag pins resolution; basePath drives the
+  // author lookup.
+  it("degrades to the vault's inherited Git identity when the project file has no author", async () => {
+    const { vault, remote } = await vaultWithRemoteAndPendingWrite();
+    const project = await makeProjectDir({ config: { vault: vault.root } });
+    try {
+      const { io } = captureOut();
+      await runSyncCommand({
+        vaultFlag: vault.root,
+        basePath: project.root,
+        out: outOf(io),
+      });
+
+      const git = simpleGit(vault.root);
+      const inherited =
+        `${(await git.raw(["config", "user.name"])).trim()} ` +
+        `<${(await git.raw(["config", "user.email"])).trim()}>`;
+      const authors = (await git.raw(["log", "--format=%an <%ae>", "-2"]))
+        .split("\n")
+        .filter((line) => line !== "");
+      expect(authors).toHaveLength(2);
+      for (const author of authors) {
+        expect(author).toBe(inherited);
+      }
+    } finally {
+      await project.cleanup();
       await remote.cleanup();
     }
   });

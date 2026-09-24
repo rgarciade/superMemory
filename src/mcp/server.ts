@@ -6,8 +6,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import pkg from "../../package.json" with { type: "json" };
 import { validateBoot } from "../boot/validate-boot.js";
 import { loadVaultConfig, resolveSyncTunables } from "../config/vault-config.js";
-import { loadGlobalConfig, resolveDefaultVault, type GlobalConfig } from "../config/global-config.js";
-import { ENV_KEYS, ProcessEnvSource, readString, type EnvSource } from "../config/env.js";
+import {
+  loadProjectConfig,
+  projectAuthor,
+  resolveVaultPath,
+} from "../config/project-config.js";
+import { ProcessEnvSource, type EnvSource } from "../config/env.js";
 import { buildIndex } from "../index/build.js";
 import { generateIndexMaps } from "../index/maps.js";
 import { listNotes } from "../index/queries.js";
@@ -19,7 +23,6 @@ import { createSyncEngine, type IndexPort, type SyncEngine } from "../sync/engin
 import { createGitClient, type CommitAuthor } from "../sync/git.js";
 import { PidfileLock, type LockOwner } from "../sync/lock.js";
 import { createSyncScheduler, type SyncScheduler } from "../sync/scheduler.js";
-import { AppError, NO_VAULT_CONFIGURED_MESSAGE } from "../util/errors.js";
 import { SystemClock, SystemTimerPort, type Clock } from "../util/clock.js";
 import { createLogger } from "../util/log.js";
 import { vaultPaths } from "../util/paths.js";
@@ -177,17 +180,12 @@ export function createVaultIndexPort(
 }
 
 /**
- * The human commit identity (design §4.3): global-config `author` — what
- * `setup` writes — becomes the git AUTHOR of every engine/resolve commit,
- * so `git blame` shows people. Absent (setup not run) ⇒ undefined, and
- * commits inherit the vault's own git identity.
+ * The human commit identity (design §4.3) now lives in
+ * `config/project-config.ts` (`projectAuthor`, add-project-config AD-6):
+ * the project file's `author` — what `setup` writes — becomes the git
+ * AUTHOR of every engine/resolve commit. Absent ⇒ undefined, and
+ * commits inherit the vault's own git identity (AD-7).
  */
-export function authorFromConfig(config: GlobalConfig): CommitAuthor | undefined {
-  const name = config.author?.name;
-  const email = config.author?.email;
-  return name && email ? { name, email } : undefined;
-}
-
 export interface SyncStackOptions {
   vaultPath: string;
   rules: RulesModel;
@@ -252,29 +250,16 @@ export async function createVaultSyncStack(opts: SyncStackOptions): Promise<Sync
   return { engine, scheduler };
 }
 
-/**
- * Vault resolution order (design §5.1): `--vault` flag → `SUPERMEMORY_VAULT`
- * → `vaults.default` in global config. Unresolvable ⇒ fails with EXACTLY
- * `No vault configured. Run: supermemory setup` (spec-mandated wording).
- */
-export async function resolveVaultPath(vaultFlag: string | undefined, env: EnvSource): Promise<string> {
-  if (vaultFlag) return vaultFlag;
-
-  const fromEnv = readString(env, ENV_KEYS.vault);
-  if (fromEnv) return fromEnv;
-
-  const globalConfig = await loadGlobalConfig(env);
-  const fromConfig = resolveDefaultVault(globalConfig);
-  if (fromConfig) return fromConfig;
-
-  throw new AppError("NO_VAULT_CONFIGURED", NO_VAULT_CONFIGURED_MESSAGE, {
-    hint: "Run `supermemory setup` to configure a default vault, or pass --vault.",
-  });
-}
-
 export interface ServeOptions {
   vaultFlag?: string;
   env?: EnvSource;
+  /**
+   * Launch directory for project-config discovery (add-project-config
+   * AD-1). Defaults to `process.cwd()` inside `serveVault` — the one
+   * documented non-commander edge: `serve` has no commander action, so
+   * the composition root injects the ambient launch directory here.
+   */
+  basePath?: string;
   clock?: Clock;
 }
 
@@ -284,12 +269,23 @@ export async function serveVault(opts: ServeOptions = {}): Promise<void> {
   const clock = opts.clock ?? new SystemClock();
   const log = createLogger();
 
-  const vaultPath = await resolveVaultPath(opts.vaultFlag, env);
+  // The one documented non-commander edge (add-project-config AD-6):
+  // everything downstream — chain resolution AND the author lookup —
+  // resolves against this launch directory.
+  const basePath = opts.basePath ?? process.cwd();
+
+  // The spec-frozen chain (flag → SUPERMEMORY_VAULT → project file at
+  // the nearest work-tree root of basePath); unresolvable ⇒ the pinned
+  // NO_VAULT_CONFIGURED error from config/project-config.
+  const vaultPath = await resolveVaultPath({ vaultFlag: opts.vaultFlag, env, basePath });
   await validateBoot(vaultPath);
 
   const paths = vaultPaths(vaultPath);
   const rules = await loadRules(paths.rulesPath);
-  const globalConfig = await loadGlobalConfig(env);
+  // AD-7: the boot's commit identity comes from the same project file
+  // the chain reads — absent ⇒ undefined ⇒ commits inherit the vault's
+  // own Git identity.
+  const author = projectAuthor(await loadProjectConfig(basePath));
 
   const [store, templates, instructions] = await Promise.all([
     buildIndex(vaultPath, rules),
@@ -305,7 +301,7 @@ export async function serveVault(opts: ServeOptions = {}): Promise<void> {
     store,
     clock,
     env,
-    author: authorFromConfig(globalConfig),
+    author,
     owner: "server",
   });
   const { scheduler } = stack;

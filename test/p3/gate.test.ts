@@ -193,6 +193,7 @@ describe("P3 gate — headline: divergent curated edits lose nothing and resolve
         const lines: string[] = [];
         await runResolveCommand({
           vaultFlag: vault.root,
+          basePath: vault.root,
           out: (line: string) => lines.push(line),
           prompt: scriptedPrompt(() => specNote("SPEC-9", "Merged Nine")),
         });
@@ -281,7 +282,7 @@ describe("P3 gate — secrets blocked on every trigger", () => {
       // engine (that is the trigger under test).
       const lines: string[] = [];
       await expect(
-        runSyncCommand({ vaultFlag: vault.root, out: (line: string) => lines.push(line) }),
+        runSyncCommand({ vaultFlag: vault.root, basePath: vault.root, out: (line: string) => lines.push(line) }),
       ).rejects.toMatchObject({ code: "SECRETS_BLOCKED" });
       expect(lines.join("\n")).toMatch(/SECRETS_BLOCKED specs\/SPEC-1\.md/);
       // The blocked write never committed: no note-grammar commit landed
@@ -373,7 +374,7 @@ describe("P3 gate — lock single-owner/stale in a server-vs-CLI scenario", () =
 
       const lines: string[] = [];
       await expect(
-        runSyncCommand({ vaultFlag: vault.root, out: (line: string) => lines.push(line) }),
+        runSyncCommand({ vaultFlag: vault.root, basePath: vault.root, out: (line: string) => lines.push(line) }),
       ).rejects.toMatchObject({ code: "LOCK_HELD" });
       expect(lines.join("\n")).toMatch(/sync outcome: locked/);
       expect(lines.join("\n")).toMatch(String(holder.pid));
@@ -406,7 +407,7 @@ describe("P3 gate — lock single-owner/stale in a server-vs-CLI scenario", () =
       );
 
       const lines: string[] = [];
-      await runSyncCommand({ vaultFlag: vault.root, out: (line: string) => lines.push(line) });
+      await runSyncCommand({ vaultFlag: vault.root, basePath: vault.root, out: (line: string) => lines.push(line) });
       expect(lines.join("\n")).toMatch(/sync outcome: synced/);
       expect(await bareTip(remote.remoteUrl)).not.toBe(before);
     } finally {
