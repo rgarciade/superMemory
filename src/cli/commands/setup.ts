@@ -6,18 +6,21 @@ import { simpleGit } from "simple-git";
 import { AppError } from "../../util/errors.js";
 import { createLogger } from "../../util/log.js";
 import { validateBoot } from "../../boot/validate-boot.js";
-import {
-  loadGlobalConfig,
-  saveGlobalConfig,
-} from "../../config/global-config.js";
-import { ProcessEnvSource, type EnvSource } from "../../config/env.js";
+import { findProjectRoot } from "../../config/project-config.js";
 
 /**
- * `supermemory setup` — the one-time per-member wizard (RFC §7.2): a
- * validated vault path, the author identity (defaulted from the vault's
- * git config), written to the global config as `vaults.default`. This
- * command is the remediation target of `No vault configured. Run:
- * supermemory setup`.
+ * `supermemory setup` — the per-project wizard (specs/project-config):
+ * a validated vault path and the author identity (defaulted from the
+ * vault's git config), written as the project's gitignored
+ * `supermemory.json` at the work-tree root. This command is the
+ * remediation target of `No vault configured. Run: supermemory setup`.
+ *
+ * Guards refuse meaningless locations BEFORE any prompt or write
+ * (design AD-2): the home root — even when it happens to be a git
+ * repository — and any location outside a Git work tree, both as
+ * `SETUP_LOCATION_REFUSED`. The launch directory and the home are
+ * INJECTED (`io`), so tests are hermetic: no chdir, no env mutation,
+ * no HOME writes.
  *
  * The interactive surface lives behind the PromptPort seam; @inquirer/
  * prompts stays at the edge so tests script the flow without a TTY.
@@ -52,8 +55,32 @@ const MAX_VAULT_ATTEMPTS = 5;
 
 export async function runSetup(
   prompts: PromptPort,
-  env: EnvSource,
+  io: { basePath: string; homeDir: string },
 ): Promise<SetupResult> {
+  // (0) guards — before ANY prompt or I/O beyond reading the launch
+  // directory; a refusal writes nothing. Order matters: the home-root
+  // check runs FIRST, so a home directory that happens to be a git
+  // repository is still refused (home-as-dotfiles-repo).
+  if (io.basePath === io.homeDir) {
+    throw new AppError(
+      "SETUP_LOCATION_REFUSED",
+      `supermemory setup refuses to run in your home directory (${io.basePath}): the home root is not an agent project.`,
+      {
+        hint: 'cd into the agent project\'s Git work tree (any subdirectory is fine) and re-run "supermemory setup". For vaults used outside any project, pass --vault or set SUPERMEMORY_VAULT.',
+      },
+    );
+  }
+  const root = findProjectRoot(io.basePath);
+  if (root === undefined) {
+    throw new AppError(
+      "SETUP_LOCATION_REFUSED",
+      `supermemory setup must run inside a Git work tree (${io.basePath} is not one): it writes the project's supermemory.json at the work-tree root.`,
+      {
+        hint: 'cd into the project where your agent works and re-run "supermemory setup". Inside a subdirectory is fine — setup writes at the work-tree root.',
+      },
+    );
+  }
+
   // (1) vault path — re-prompt until boot validation passes
   let vault: string | undefined;
   let lastError: AppError | undefined;
@@ -62,7 +89,7 @@ export async function runSetup(
       "Vault path (a git repository with .memory/rules.md):",
     )).trim();
     if (answer === "") continue;
-    const resolved = resolveVaultPath(answer);
+    const resolved = expandVaultInput(answer, io.homeDir);
     try {
       await validateBoot(resolved);
       vault = resolved;
@@ -96,7 +123,7 @@ export async function runSetup(
     gitIdentity.email,
   )).trim();
 
-  // (3) confirm + write the global config
+  // (3) confirm
   const ok = await prompts.confirm(
     `Write vaults.default=${vault} and author "${name} <${email}>" to the global config?`,
   );
@@ -106,27 +133,27 @@ export async function runSetup(
       "setup cancelled — nothing was written.",
     );
   }
-  const existing = await loadGlobalConfig(env);
-  await saveGlobalConfig(env, {
-    ...existing,
-    vaults: { ...existing.vaults, default: vault },
-    author: { name, email },
-  });
+  // (4) the project-file write lands in task 4.4 — this intermediate
+  // commit only rewires the seam (signature + guards + rename); the
+  // global-config merge-write is already gone because its env param is.
 
   return { vault, author: { name, email } };
 }
 
 /**
- * Expands a leading `~` to the home directory and resolves the result to
- * an absolute path. A vault path saved as typed (relative, or with `~`
- * left unexpanded) breaks once supermemory is later launched from a
- * different cwd, or rejects `~` outright since it is shell syntax, not
- * filesystem syntax.
+ * Expands a leading `~` to the (injected) home directory and resolves
+ * the result to an absolute path. A vault path saved as typed
+ * (relative, or with `~` left unexpanded) breaks once supermemory is
+ * later launched from a different cwd, or rejects `~` outright since it
+ * is shell syntax, not filesystem syntax. The home is a parameter, not
+ * `os.homedir()` — the seam rule keeps ambient reads at the commander
+ * edge (add-project-config AD-6 rename; was `resolveVaultPath`, which
+ * now names the config chain in `config/project-config.ts`).
  */
-function resolveVaultPath(raw: string): string {
-  if (raw === "~") return os.homedir();
+function expandVaultInput(raw: string, homeDir: string): string {
+  if (raw === "~") return homeDir;
   if (raw.startsWith("~/") || raw.startsWith("~\\")) {
-    return path.resolve(os.homedir(), raw.slice(2));
+    return path.resolve(homeDir, raw.slice(2));
   }
   return path.resolve(raw);
 }
@@ -152,7 +179,12 @@ export function registerSetupCommand(program: Command): void {
       "One-time wizard: point supermemory at your vault and identity.",
     )
     .action(async () => {
-      const result = await runSetup(consolePrompts, new ProcessEnvSource());
+      // The commander action is the ambient edge (add-project-config
+      // AD-2): it injects the launch directory and the home directory.
+      const result = await runSetup(consolePrompts, {
+        basePath: process.cwd(),
+        homeDir: os.homedir(),
+      });
       log.info(
         `setup complete — default vault: ${result.vault} (author: ${result.author.name})`,
       );

@@ -28,6 +28,9 @@ describe("AppError", () => {
       LOCK_HELD: "LOCK_HELD",
       CONFLICT_CURATED: "CONFLICT_CURATED",
       NO_VAULT_CONFIGURED: "NO_VAULT_CONFIGURED",
+      // add-project-config AD-2: setup refuses the home root and any
+      // location outside a Git work tree (one code added, none removed).
+      SETUP_LOCATION_REFUSED: "SETUP_LOCATION_REFUSED",
     });
   });
 
