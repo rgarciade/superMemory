@@ -1,6 +1,6 @@
 # RFC: supermemory — A Team Knowledge Layer over a Git-Synced Obsidian Vault
 
-Status: Draft v1.3 (per-project supermemory.json replaces the global config; legacy .memory/local.json superseded)
+Status: Draft v1.3 (per-project supermemory.json replaces the global config)
 Author: supermemory maintainers
 Target stack: Node.js LTS, TypeScript, MCP (Model Context Protocol)
 
@@ -297,8 +297,7 @@ vault, the vault declares the contract:
 - On every sync and boot, the server checks it. If the vault requires a newer
   format than the binary supports → refuse with
   `vault requires format 2.x — run supermemory upgrade / update the app`.
-- Minor/patch bumps must stay backward compatible; major bumps ship with a
-  migration command (`supermemory migrate`).
+- Minor/patch bumps are accepted; a major bump is refused.
 
 ### 4.5 `.gitattributes` (created by `init`, lives in the vault)
 
@@ -667,7 +666,7 @@ commands yourself — the server owns sync.
 | Concurrent edits to the same note by agent + human | Atomic note design, deterministic naming, pull-before-write, conflict ladder (§6.4). Conflicts are rare by construction; never destructive. |
 | Adoption decay (agents skip the rules; vault becomes a graveyard) | Validation on every write (agents cannot bypass structure), `vault validate` CI command (same rules at PR level), staleness flags, consumer prompt shipped with the product. |
 | Maintenance treadmill (MCP spec churn, Obsidian evolution, competitor motion) | Positioning as the structure layer, not another obsidian CRUD server; minimal surface (6 tools); deterministic core with no model dependencies. |
-| Version drift across members | `format_version` contract + fail-fast guard + `migrate` (§4.4). |
+| Version drift across members | `format_version` contract + fail-fast guard (§4.4). |
 
 Adjacent prior art and why they don't cover this: Obsidian MCP servers
 (6+, generic CRUD, no team ontology, no rules-as-config); Basic Memory
@@ -700,7 +699,7 @@ conflict policies is the unoccupied slot.
   strictest-wins resolution across vault policy + `.env`
 - `vault validate` (CI mode) + `--profile` support
 - `theirs_and_archive` policy, staleness flags, attic flow
-- format_version guard + `migrate`
+- format_version guard
 
 **M3 — Polish / optional**
 - Elicitation-based first-run where clients support it

@@ -36,7 +36,7 @@ import {
  * The interactive surface lives behind the PromptPort seam; @inquirer/
  * prompts stays at the edge so tests script the flow without a TTY.
  * The wizard itself never logs: the commander action owns the
- * completion log and the one-time legacy-config hint line (AD-4).
+ * completion log.
  */
 
 export interface PromptPort {
@@ -66,18 +66,9 @@ export interface SetupResult {
   root: string;
   vault: string;
   author: { name: string; email: string };
-  /**
-   * Path of a legacy global config (`~/.config/supermemory/config.json`
-   * under the injected home) when one exists — surfaced informationally
-   * only: it is never read, never imported, never deleted (AD-4).
-   */
-  legacyConfigPath?: string;
 }
 
 const MAX_VAULT_ATTEMPTS = 5;
-
-const LEGACY_GLOBAL_CONFIG_PATH = (homeDir: string): string =>
-  path.join(homeDir, ".config", "supermemory", "config.json");
 
 export async function runSetup(
   prompts: PromptPort,
@@ -106,12 +97,6 @@ export async function runSetup(
       },
     );
   }
-
-  // One-time informational legacy hint (AD-4): existence probe only —
-  // the file is never read, never imported, never deleted.
-  const legacyConfigPath = existsSync(LEGACY_GLOBAL_CONFIG_PATH(io.homeDir))
-    ? LEGACY_GLOBAL_CONFIG_PATH(io.homeDir)
-    : undefined;
 
   // (1) vault path — re-prompt until boot validation passes
   let vault: string | undefined;
@@ -191,12 +176,7 @@ export async function runSetup(
     EXAMPLE_CONFIG_CONTENT,
   );
 
-  return {
-    root,
-    vault,
-    author,
-    ...(legacyConfigPath !== undefined ? { legacyConfigPath } : {}),
-  };
+  return { root, vault, author };
 }
 
 /**
@@ -254,20 +234,13 @@ async function readGitIdentity(
 }
 
 /**
- * The user-visible completion lines for a successful setup: the
- * completion line, plus EXACTLY ONE legacy-config hint line iff a
- * legacy global config exists (AD-4's pinned, disclosed wording). The
+ * The user-visible completion lines for a successful setup. The
  * wizard never logs — the console binding emits these.
  */
 export function setupCompletionLines(result: SetupResult): string[] {
   const lines = [
     `setup complete — project vault: ${result.vault} (author: ${result.author.name})`,
   ];
-  if (result.legacyConfigPath !== undefined) {
-    lines.push(
-      `legacy global config found at ${result.legacyConfigPath} — supermemory no longer reads it. You may delete it manually.`,
-    );
-  }
   return lines;
 }
 
@@ -293,7 +266,7 @@ export function registerSetupCommand(
     .action(async () => {
       // The commander action is the ambient edge (add-project-config
       // AD-2): it injects the launch directory and the home directory,
-      // and owns the completion log + the one legacy-hint line.
+      // and owns the completion log.
       const result = await run({
         basePath: process.cwd(),
         homeDir: os.homedir(),

@@ -137,9 +137,9 @@ On success, `setup` SHALL write `./supermemory.json` at the project root as a fr
 
 #### Scenario: Rerun replaces the file entirely
 
-- GIVEN `supermemory.json` already exists with `{ "vault": "/old/vault", "legacy": true }`
+- GIVEN `supermemory.json` already exists with `{ "vault": "/old/vault", "stale": true }`
 - WHEN setup reruns successfully with vault `/Users/me/vaults/notes`
-- THEN the file contains exactly the new flat content for `/Users/me/vaults/notes` and neither `/old/vault` nor the `legacy` key remains
+- THEN the file contains exactly the new flat content for `/Users/me/vaults/notes` and neither `/old/vault` nor the `stale` key remains
 
 #### Scenario: Gitignore line is appended when missing
 

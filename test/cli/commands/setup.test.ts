@@ -24,16 +24,15 @@ import { makeProjectDir } from "../../helpers/project.js";
 // home are INJECTED (seam rule: no chdir, no process.env mutation, no
 // HOME writes). Guards refuse the home root and any location outside a
 // Git work tree (SETUP_LOCATION_REFUSED, pinned bytes) BEFORE any
-// prompt or write; refusals write nothing. The legacy global config is
-// never imported, never deleted — the hint test fakes the home path via
-// injection and never touches the real one.
+// prompt or write; refusals write nothing. The home path is
+// faked via injection; the real one is never touched.
 //
 // Task 4.3 [RED second]: writes land at the work-tree root — fresh
 // supermemory.json (no merge), one appended .gitignore line (N7
 // semantics via appendMissingLines), the committed example file
 // (created-when-absent, never overwritten, placeholder bytes, no
 // author anywhere), the ≤5-attempt abort leaving zero artifacts, the
-// pinned confirm bytes, and the one-time legacy hint (AD-4).
+// pinned confirm bytes.
 
 /** A scripted prompt port answering in order; records the questions. */
 function scriptedPort(answers: {
@@ -360,7 +359,7 @@ describe("runSetup — writes at the work-tree root (AD-2/AD-3/AD-5)", () => {
 
   it("rewrites the file FRESH on rerun — stale keys do not survive; serialization pinned", async () => {
     const project = await makeProjectDir({
-      config: { vault: "/old/vault", legacy: true },
+      config: { vault: "/old/vault", stale: true },
     });
     const vault = await makeVault("sm-setup-fresh-v-");
     try {
@@ -382,7 +381,7 @@ describe("runSetup — writes at the work-tree root (AD-2/AD-3/AD-5)", () => {
       expect(raw).toBe(expected);
       // Neither the old vault nor the stale key survives the rewrite.
       expect(raw).not.toContain("/old/vault");
-      expect(raw).not.toContain("legacy");
+      expect(raw).not.toContain("stale");
     } finally {
       await project.cleanup();
       await rm(vault, { recursive: true, force: true });
@@ -566,74 +565,13 @@ describe("runSetup — writes at the work-tree root (AD-2/AD-3/AD-5)", () => {
         `Write supermemory.json in ${project.root} (vault ${vault}, author "Raul" <raul@example.com>)?`,
       );
       // The wizard (PromptPort flow) never logs and never mentions any
-      // other config surface — the AD-4 legacy hint line lives at the
-      // console edge, not in the wizard.
+      // other config surface.
       for (const message of prompts.messages) {
         expect(message).not.toContain("global config");
       }
     } finally {
       await project.cleanup();
       await rm(vault, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("runSetup — legacy global config hint (AD-4)", () => {
-  const happyAnswers = (vault: string) => ({
-    vaultPath: [vault],
-    authorName: ["Raul"],
-    authorEmail: ["raul@example.com"],
-    confirm: [true],
-  });
-
-  it("sets SetupResult.legacyConfigPath when the legacy file exists under the INJECTED home; never reads or deletes it", async () => {
-    const project = await makeProjectDir();
-    const vault = await makeVault("sm-setup-legacy-v-");
-    const fakeHome = await mkdtemp(path.join(os.tmpdir(), "sm-setup-legacy-h-"));
-    const legacyDir = path.join(fakeHome, ".config", "supermemory");
-    await mkdir(legacyDir, { recursive: true });
-    const legacyPath = path.join(legacyDir, "config.json");
-    const legacyBytes = '{\n  "vaults": { "default": "/LEAK/legacy-vault" }\n}\n';
-    await writeFile(legacyPath, legacyBytes, "utf8");
-    try {
-      const prompts = scriptedPort(happyAnswers(vault));
-      const result = await runSetup(prompts, {
-        basePath: project.root,
-        homeDir: fakeHome,
-      });
-      expect(result.legacyConfigPath).toBe(legacyPath);
-      // Never deleted, never modified.
-      expect(await readFile(legacyPath, "utf8")).toBe(legacyBytes);
-      // Never imported: the project file holds only the answered vault.
-      const raw = await readFile(
-        path.join(project.root, PROJECT_CONFIG_FILENAME),
-        "utf8",
-      );
-      expect(raw).not.toContain("/LEAK/legacy-vault");
-    } finally {
-      await project.cleanup();
-      await rm(vault, { recursive: true, force: true });
-      await rm(fakeHome, { recursive: true, force: true });
-    }
-  });
-
-  it("leaves legacyConfigPath undefined when the legacy file is absent", async () => {
-    const project = await makeProjectDir();
-    const vault = await makeVault("sm-setup-nolegacy-v-");
-    const fakeHome = await mkdtemp(
-      path.join(os.tmpdir(), "sm-setup-nolegacy-h-"),
-    );
-    try {
-      const prompts = scriptedPort(happyAnswers(vault));
-      const result = await runSetup(prompts, {
-        basePath: project.root,
-        homeDir: fakeHome,
-      });
-      expect(result.legacyConfigPath).toBeUndefined();
-    } finally {
-      await project.cleanup();
-      await rm(vault, { recursive: true, force: true });
-      await rm(fakeHome, { recursive: true, force: true });
     }
   });
 });
@@ -653,50 +591,27 @@ describe("setup completion lines (console edge owns the log; wizard never logs)"
       | undefined;
   }
 
-  it("emits exactly one legacy-hint line with the pinned bytes iff legacyConfigPath is present", async () => {
-    const lines = await completionLinesFn();
-    expect(lines).toBeTypeOf("function");
-    if (lines === undefined) return; // keep the RED message above clean
-    const withLegacy = {
-      root: "/p",
-      vault: "/v",
-      author: { name: "Raul", email: "raul@example.com" },
-      legacyConfigPath: "/home/.config/supermemory/config.json",
-    } as SetupResult;
-    const out = lines(withLegacy);
-    expect(out).toHaveLength(2); // completion + EXACTLY ONE legacy line
-    expect(out[1]).toBe(
-      "legacy global config found at /home/.config/supermemory/config.json — supermemory no longer reads it. You may delete it manually.",
-    );
-  });
-
-  it("emits no legacy line when legacyConfigPath is absent", async () => {
+  it("emits only the completion line", async () => {
     const lines = await completionLinesFn();
     expect(lines).toBeTypeOf("function");
     if (lines === undefined) return;
-    const withoutLegacy = {
+    const result = {
       root: "/p",
       vault: "/v",
       author: { name: "Raul", email: "raul@example.com" },
     } as SetupResult;
-    const out = lines(withoutLegacy);
+    const out = lines(result);
     expect(out).toHaveLength(1); // completion only
-    expect(out.join("\n")).not.toContain("legacy global config");
-  });
+    });
 });
 
 describe("registerSetupCommand (commander edge owns the log)", () => {
-  // New-seam tests: the injectable runner + the completion logging land
-  // together in 4.4 (driving the OLD action would run @inquirer on a
-  // non-TTY stdin). The bytes asserted here were RED-pinned in 4.3 via
-  // setupCompletionLines; this pins the ambient-edge injection and the
-  // action-side "exactly one legacy line" wiring.
-  function fakeResult(legacyConfigPath?: string): SetupResult {
+  // Pins the ambient-edge injection and the completion logging.
+  function fakeResult(): SetupResult {
     return {
       root: "/p",
       vault: "/v",
       author: { name: "Raul", email: "raul@example.com" },
-      ...(legacyConfigPath !== undefined ? { legacyConfigPath } : {}),
     } as SetupResult;
   }
 
@@ -730,28 +645,12 @@ describe("registerSetupCommand (commander edge owns the log)", () => {
     }
   }
 
-  it("injects the ambient edge and logs EXACTLY ONE legacy line when one is present", async () => {
-    const { seen, lines } = await captureActionLog(
-      fakeResult("/home/.config/supermemory/config.json"),
-    );
+  it("injects the ambient edge and logs the completion line", async () => {
+    const { seen, lines } = await captureActionLog(fakeResult());
     // The commander action is the ONE ambient edge (AD-2).
     expect(seen).toHaveLength(1);
     expect(seen[0]?.basePath).toBe(process.cwd());
     expect(seen[0]?.homeDir).toBe(os.homedir());
-    const legacyLines = lines.filter((l) =>
-      l.includes("legacy global config found at"),
-    );
-    expect(legacyLines).toHaveLength(1);
-    expect(legacyLines[0]).toContain(
-      "legacy global config found at /home/.config/supermemory/config.json — supermemory no longer reads it. You may delete it manually.",
-    );
-    // The completion line keeps the "global config" language out.
-    expect(lines.some((l) => l.includes("setup complete"))).toBe(true);
-  });
-
-  it("logs no legacy line when the result has none", async () => {
-    const { lines } = await captureActionLog(fakeResult());
-    expect(lines.filter((l) => l.includes("legacy global config"))).toHaveLength(0);
     expect(lines.some((l) => l.includes("setup complete"))).toBe(true);
   });
 });

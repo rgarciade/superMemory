@@ -30,7 +30,7 @@ export interface IndexConflict {
  * never silently dropped: when `onConflict` is given, each collision is
  * surfaced through it. First file in the sorted walk wins
  * deterministically; the second stays unindexed. `onConflict` is
- * optional — without it behavior is unchanged (backward compatible).
+ * optional — without it behavior is unchanged.
  */
 export async function buildIndex(
   vaultPath: string,
